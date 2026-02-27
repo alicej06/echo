@@ -15,7 +15,7 @@ data/**/*.mp4
 
 # Model weights
 models/*.pt
-models/*.onnx
+# models/*.onnx  <-- bundled directly in repo for Railway dev deploy
 models/*.mlpackage
 models/*.mlmodel
 
