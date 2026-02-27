@@ -1,0 +1,47 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Only redeploy when backend code changes (not mobile/docs)
+      - 'src/**'
+      - 'models/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'railway.toml'
+      - '.railwayignore'
+
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --detach --service maia-emg-asl
+
+      - name: Health check
+        run: |
+          echo "Waiting for deployment to become healthy..."
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://maia-emg-asl-production.up.railway.app/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Server healthy"
+              exit 0
+            fi
+            echo "Attempt $i/12 — HTTP $STATUS — waiting 15s..."
+            sleep 15
+          done
+          echo "Warning: server did not become healthy in time"
+          exit 1
