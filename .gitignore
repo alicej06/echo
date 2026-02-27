@@ -44,3 +44,8 @@ wandb/
 
 # R2 credentials (NEVER commit)
 r2_credentials.sh
+
+# Mobile / React Native
+mobile/react-native/node_modules/
+mobile/react-native/.expo/
+mobile/react-native/dist/
