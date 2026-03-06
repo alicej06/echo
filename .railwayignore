@@ -1,38 +1,32 @@
-# Large data files - not needed on Railway
+# Large data directories
 data/
-*.npz
-*.csv
-
-# Training notebooks and scripts
 notebooks/
-scripts/slurm/
-scripts/train_*.py
-scripts/optuna_*.py
-scripts/download_*.py
-scripts/extract_*.py
-scripts/record_*.py
-scripts/augmentation_demo.py
-scripts/benchmark_models.py
-scripts/run_full_pipeline.sh
-
-# Hardware and mobile
+docs/
 hardware/
 mobile/
+scripts/slurm/
 
-# Model weights - large .pt files excluded; .onnx bundled directly for dev
-# (switch to R2_MODEL_URL once doing real GPU training)
-*.pt
-*.mlpackage
-*.mlmodel
-
-# Dev dependencies and tools
-requirements-dev.txt
+# Development files
 .venv/
 venv/
-tests/
-docs/
-configs/
-
-# Git
+__pycache__/
+*.pyc
 .git/
-.gitignore
+.github/
+
+# Test files
+tests/
+scripts/smoke_test.py
+scripts/demo_pipeline.py
+scripts/benchmark_models.py
+scripts/augmentation_demo.py
+
+# Local configs (use Railway environment variables instead)
+.env
+*.env.local
+
+# Model files (downloaded from R2 at startup, not committed)
+models/*.pt
+models/*.onnx
+models/calibrated/
+models/gpu/

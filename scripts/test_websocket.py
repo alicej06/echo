@@ -1,79 +1,235 @@
-#!/usr/bin/env python3
 """
-WebSocket test client for MAIA inference server.
+WebSocket client for end-to-end testing of the EMG-ASL inference server.
 
-Usage:
-    python scripts/test_websocket.py
-    python scripts/test_websocket.py --url wss://your-app.railway.app/ws/emg --api-key yourkey
-    python scripts/test_websocket.py --stress --n-windows 100
+Generates synthetic raw EMG frames (8-channel int16 little-endian binary), sends
+them over the /stream WebSocket endpoint, and prints each prediction response.
+
+Usage
+-----
+# Basic test — 20 windows, label "A" (label only affects synthetic noise bias):
+python scripts/test_websocket.py
+
+# Custom label and window count:
+python scripts/test_websocket.py --url ws://192.168.1.x:8765/stream --label HELLO --windows 50
+
+# Stress test — send 1000 windows as fast as possible:
+python scripts/test_websocket.py --stress --windows 1000
+
+Exit codes
+----------
+0  All windows sent and server remained connected throughout.
+1  Connection failed or server closed unexpectedly.
 """
+
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import struct
 import sys
 import time
+
 import numpy as np
 
-from src.constants import N_CHANNELS, WINDOW_SAMPLES
+try:
+    import websockets
+except ImportError:
+    print("ERROR: 'websockets' not installed. Run: pip install websockets", file=sys.stderr)
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Constants — must match src/utils/constants.py
+# ---------------------------------------------------------------------------
+
+DEFAULT_URL = "ws://localhost:8765/stream"
+N_CHANNELS = 8
+WINDOW_SIZE_SAMPLES = 40        # SAMPLE_RATE=200 Hz, WINDOW_SIZE_MS=200 ms
+SEND_INTERVAL_S = 0.10          # 10 Hz — realistic BLE streaming rate
+INT16_MAX = 32767
+INT16_MIN = -32768
 
 
-def make_binary_frame(window: np.ndarray) -> bytes:
-    """Encode (40, 8) float32 window -> 640-byte big-endian int16."""
-    clipped = np.clip(window, -1.0, 1.0)
-    int16_data = (clipped * 32767).astype(np.int16)
-    return struct.pack(f">{WINDOW_SAMPLES * N_CHANNELS}h", *int16_data.flatten())
+# ---------------------------------------------------------------------------
+# Synthetic frame generator
+# ---------------------------------------------------------------------------
+
+def _make_raw_ble_frame(label: str, rng: np.random.Generator) -> bytes:
+    """Return one binary BLE frame: 8-channel interleaved int16 LE.
+
+    The server's EMGPipeline.ingest_bytes() expects exactly this layout:
+        [ch0_s0, ch1_s0, ..., ch7_s0, ch0_s1, ..., ch7_s39]
+    as little-endian signed 16-bit integers.
+
+    We generate plausible EMG noise (zero-mean Gaussian, ~500 ADC units RMS)
+    with a mild label-dependent DC offset so different labels produce slightly
+    different synthetic signals.  This does not affect server behaviour — the
+    random-weight ONNX baseline will predict randomly regardless — but it makes
+    the frames look realistic in a packet capture.
+
+    Parameters
+    ----------
+    label:
+        ASL label string used to seed a repeatable per-label DC bias.
+    rng:
+        Shared NumPy random generator for reproducibility.
+    """
+    # Label-dependent bias: hash label to a small ADC offset per channel
+    label_seed = sum(ord(c) for c in label)
+    per_channel_bias = ((label_seed * np.arange(1, N_CHANNELS + 1)) % 200) - 100  # [-100, 100]
+
+    # (WINDOW_SIZE_SAMPLES, N_CHANNELS) — Gaussian EMG noise
+    samples = rng.normal(loc=0.0, scale=500.0, size=(WINDOW_SIZE_SAMPLES, N_CHANNELS))
+    samples += per_channel_bias[np.newaxis, :]
+
+    # Clip to int16 range and cast
+    samples = np.clip(samples, INT16_MIN, INT16_MAX).astype(np.int16)
+
+    # Pack as interleaved little-endian int16: row-major order is already
+    # sample-major (each row = one time-point across all channels).
+    return samples.tobytes()  # 40 * 8 * 2 = 640 bytes per frame
 
 
-async def run_test(url: str, api_key: str, n_windows: int = 5, stress: bool = False):
+# ---------------------------------------------------------------------------
+# Core send-receive loop
+# ---------------------------------------------------------------------------
+
+async def _run(url: str, label: str, n_windows: int, stress: bool) -> int:
+    """Connect, stream frames, collect responses.  Returns exit code."""
+    rng = np.random.default_rng(seed=42)
+
+    print(f"Connecting to {url} ...")
     try:
-        import websockets
-    except ImportError:
-        print("ERROR: websockets not installed. Run: pip install websockets")
-        sys.exit(1)
+        async with websockets.connect(url) as ws:  # type: ignore[attr-defined]
+            print(f"Connected. Sending {n_windows} windows (label={label!r})"
+                  f"{', STRESS MODE' if stress else f', interval={SEND_INTERVAL_S*1000:.0f}ms'}\n")
 
-    headers = {"X-API-Key": api_key}
-    rng = np.random.default_rng(42)
+            latencies: list[float] = []
+            responses_received = 0
 
-    print(f"Connecting to {url}")
-    try:
-        async with websockets.connect(url, additional_headers=headers, open_timeout=10) as ws:
-            print(f"Connected! Sending {n_windows} windows...\n")
-            latencies = []
-            for i in range(n_windows):
-                # Synthetic window
-                window = rng.normal(0, 0.1, (WINDOW_SAMPLES, N_CHANNELS)).astype(np.float32)
-                frame = make_binary_frame(window)
-                t0 = time.perf_counter()
+            for i in range(1, n_windows + 1):
+                frame = _make_raw_ble_frame(label, rng)
+                t_send = time.perf_counter()
                 await ws.send(frame)
-                response = await asyncio.wait_for(ws.recv(), timeout=5.0)
-                latency = (time.perf_counter() - t0) * 1000
-                latencies.append(latency)
-                import json
-                result = json.loads(response)
-                if not stress or i % 20 == 0:
-                    print(f"  [{i+1:3d}] class={result.get('class','?'):>4}  "
-                          f"conf={result.get('confidence',0):.3f}  "
-                          f"latency={latency:.1f}ms")
-            print(f"\nLatency: mean={np.mean(latencies):.1f}ms  "
-                  f"p95={np.percentile(latencies, 95):.1f}ms  "
-                  f"p99={np.percentile(latencies, 99):.1f}ms")
-    except Exception as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
+
+                # The server only sends a response when the debounce interval
+                # has elapsed AND confidence >= threshold.  With random weights
+                # the baseline model rarely clears the threshold, so we use a
+                # short receive timeout and treat silence as valid (server is
+                # processing but suppressing low-confidence predictions).
+                recv_label = "—"
+                recv_conf = float("nan")
+                latency_ms = float("nan")
+
+                try:
+                    raw_response = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                    t_recv = time.perf_counter()
+                    latency_ms = (t_recv - t_send) * 1000.0
+                    latencies.append(latency_ms)
+                    responses_received += 1
+
+                    data = json.loads(raw_response)
+                    recv_label = data.get("label", "?")
+                    recv_conf = data.get("confidence", float("nan"))
+
+                    tag = "[server random-weight mode]" if i == 1 else ""
+                    print(
+                        f"Window {i:3d}/{n_windows}"
+                        f" -> label={recv_label:<10s}"
+                        f" conf={recv_conf:.2f}"
+                        f" latency={latency_ms:.1f}ms"
+                        f"  {tag}"
+                    )
+                except asyncio.TimeoutError:
+                    # No response within 500 ms — server suppressed (debounce /
+                    # low confidence).  This is normal with the baseline model.
+                    print(
+                        f"Window {i:3d}/{n_windows}"
+                        f" -> (no response — debounce/confidence filter)"
+                    )
+
+                if not stress:
+                    await asyncio.sleep(SEND_INTERVAL_S)
+
+            # ------------------------------------------------------------------
+            # Summary
+            # ------------------------------------------------------------------
+            print()
+            if latencies:
+                avg_lat = sum(latencies) / len(latencies)
+                elapsed = n_windows * (SEND_INTERVAL_S if not stress else 0.0)
+                # Use wall-clock throughput: approximate from total time if stress
+                throughput = (
+                    responses_received / elapsed
+                    if elapsed > 0
+                    else float("inf")
+                )
+                print(
+                    f"Summary: {n_windows} windows sent, "
+                    f"{responses_received} responses received, "
+                    f"avg latency={avg_lat:.1f}ms"
+                    + (f", throughput~{throughput:.1f} req/s" if elapsed > 0 else "")
+                )
+            else:
+                print(
+                    f"Summary: {n_windows} windows sent, "
+                    f"0 responses received (all suppressed by server — "
+                    f"normal with random-weight baseline model)."
+                )
+
+            return 0
+
+    except (OSError, ConnectionRefusedError, websockets.exceptions.WebSocketException) as exc:
+        print(f"\nERROR: Could not connect to {url!r}: {exc}", file=sys.stderr)
+        print("Is the server running?  Start it with: ./start-server.sh", file=sys.stderr)
+        return 1
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default="ws://localhost:8000/ws/emg")
-    parser.add_argument("--api-key", default="dev-key-change-me")
-    parser.add_argument("--n-windows", type=int, default=10)
-    parser.add_argument("--stress", action="store_true")
-    args = parser.parse_args()
-    if args.stress:
-        args.n_windows = 500
-    asyncio.run(run_test(args.url, args.api_key, args.n_windows, args.stress))
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="End-to-end WebSocket test for the EMG-ASL inference server.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    p.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help=f"WebSocket URL to connect to (default: {DEFAULT_URL})",
+    )
+    p.add_argument(
+        "--label",
+        default="A",
+        help="ASL label name for synthetic data bias (default: A)",
+    )
+    p.add_argument(
+        "--windows",
+        type=int,
+        default=20,
+        help="Number of windows to send (default: 20)",
+    )
+    p.add_argument(
+        "--stress",
+        action="store_true",
+        help="Send windows as fast as possible with no inter-window sleep",
+    )
+    return p.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    exit_code = asyncio.run(
+        _run(
+            url=args.url,
+            label=args.label,
+            n_windows=args.windows,
+            stress=args.stress,
+        )
+    )
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

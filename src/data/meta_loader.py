@@ -2,7 +2,8 @@
 Loader for Meta Research EMG datasets.
 
 Supports three Meta open-source datasets, all recorded on 16-channel / 2kHz
-hardware matching the Meta Neural Band spec:
+hardware. Data is resampled to 200 Hz and channel-subset to 8ch to match
+the MYO Armband acquisition spec used at inference time:
 
   - emg2pose:                  193 participants · 370 hours · hand joint angles
   - generic-neuromotor-interface (gni): 100 participants · 200+ hours · gesture classes

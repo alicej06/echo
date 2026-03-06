@@ -1,28 +1,54 @@
-# Conformer GPU training configuration (IYA Nvidia Lab)
-model: conformer
-d_model: 256
-n_layers: 6
-n_heads: 8
-kernel_size: 31
-dropout: 0.1
+# Conformer -- GPU-Optimized Configuration (IYA Nvidia Lab)
+# Designed for: 4x A100 or H100 GPUs
+# Estimated training time: 8-12 minutes
+#
+# Equivalent CLI invocation (config loading is on the roadmap; use args today):
+#   torchrun --nproc_per_node=4 scripts/train_gpu_ddp.py \
+#       --model lstm \
+#       --data-dir data/raw/ \
+#       --epochs 300 \
+#       --batch-size 1024 \
+#       --lr 3.0e-4 \
+#       --amp \
+#       --output-dir models/gpu/ \
+#       --wandb \
+#       --wandb-project maia-emg-asl
+#
+# Window note: window_size_samples=80 -> 400 ms at 200 Hz (2x the default 200 ms).
+# 75% overlap compensates for the larger window so temporal resolution is preserved.
+
+model:
+  type: conformer
+  d_model: 256          # larger than default 128 for GPU scale
+  n_layers: 6           # deeper than default 4
+  n_heads: 8
+  conv_kernel: 15
+  dropout: 0.1
 
 training:
   epochs: 300
-  batch_size: 1024
-  learning_rate: 0.0005
-  scheduler: cosine_warmup
-  warmup_epochs: 10
-  weight_decay: 0.0001
-  early_stop_patience: 20
+  batch_size: 1024      # large batch benefits from attention
+  learning_rate: 3.0e-4
+  weight_decay: 1.0e-5
   grad_clip: 1.0
-  gradient_accumulation: 4  # effective batch = 4096
-  mixed_precision: true
-
-augmentation:
-  enabled: true
-  strength: strong
+  grad_accum: 1
+  amp: true
+  early_stop_patience: 30
 
 data:
-  window_samples: 40
-  hop_samples: 20
-  n_classes: 26
+  window_size_samples: 80      # larger window: 400ms (2x default)
+  overlap: 0.75                # 75% overlap to compensate for larger window
+  augment: true
+  augment_strength: strong     # full augmentation suite for large model
+  balance_classes: true
+
+optimizer:
+  name: adamw
+
+scheduler:
+  name: cosine
+
+output:
+  model_dir: models/gpu/
+  run_name: conformer_gpu_scale
+  wandb_project: maia-emg-asl

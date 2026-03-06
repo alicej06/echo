@@ -72,7 +72,7 @@ export default function DemoScreen() {
         <Text style={styles.cardTitle}>Sign Demo Playback</Text>
         <Text style={styles.cardSubtitle}>
           Simulates the UI experience of real-time ASL recognition.
-          Connect the neural band to see live predictions.
+          Connect the MYO Armband to see live predictions.
         </Text>
 
         <Animated.Text style={[styles.bigLetter, { transform: [{ scale: scaleAnim }] }]}>
@@ -106,7 +106,7 @@ export default function DemoScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>How it works</Text>
         {[
-          ['Neural Band', '8-channel sEMG - BLE - iPhone'],
+          ['MYO Armband', '8-channel sEMG - BLE - iPhone'],
           ['Signal Processing', '200Hz - bandpass - 40-sample windows'],
           ['On-Device ONNX', 'LSTM inference in ~15ms'],
           ['Server Fallback', 'Railway WebSocket if on-device fails'],

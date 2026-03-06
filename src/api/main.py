@@ -1,211 +1,317 @@
-"""MAIA EMG-ASL Inference Server — FastAPI + WebSocket."""
+"""
+EMG-ASL inference server -- FastAPI application entry point.
+
+Responsibilities
+----------------
+* Create and share the ``EMGPipeline`` singleton across all requests.
+* Load the inference backend (ONNX preferred, PyTorch fallback) at startup.
+* Download the ONNX model from Cloudflare R2 at startup if not present locally
+  and ``R2_MODEL_URL`` is set in the environment.
+* Mount the WebSocket stream endpoint (``/stream``).
+* Include the calibration REST router (``/calibrate/...``).
+* Configure CORS so the companion mobile app can reach all endpoints.
+* Emit structured JSON logs throughout.
+
+Running
+-------
+::
+
+    uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+Or use the ``run()`` helper at the bottom for programmatic startup.
+"""
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import struct
-import time
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, AsyncGenerator
 
-import numpy as np
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from src.api.auth import APIKeyMiddleware
-from src.constants import (
-    N_CHANNELS, WINDOW_SAMPLES, SAMPLE_RATE,
-    N_CLASSES, ASL_CLASSES, CONFIDENCE_THRESHOLD,
+# ---------------------------------------------------------------------------
+# Logging — structured JSON-style output compatible with log aggregators.
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stdout,
+    force=True,
 )
+logger = logging.getLogger("emg_asl.api")
 
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Global model state
+# Import project modules after logging is configured so their loggers inherit.
 # ---------------------------------------------------------------------------
-_ort_session: Optional[object] = None
-_model_path: str = ""
+
+from ..utils.constants import (
+    ONNX_MODEL_PATH,
+    PYTORCH_MODEL_PATH,
+    PROFILE_DIR,
+    REST_PORT,
+    WS_HOST,
+    WS_PORT,
+)
+from ..utils.pipeline import EMGPipeline
+from ..models.lstm_classifier import ASLEMGClassifier
+from ..utils.constants import ASL_LABELS, FEATURE_VECTOR_SIZE, NUM_CLASSES, SAMPLE_RATE
+
+# Lazy-imported so the server starts even if onnxruntime isn't installed.
+_ort: Any = None
 
 
-def _load_onnx_model(path: str):
-    global _ort_session, _model_path
-    try:
-        import onnxruntime as ort
-        opts = ort.SessionOptions()
-        opts.intra_op_num_threads = int(os.environ.get("ORT_NUM_THREADS", "2"))
-        _ort_session = ort.InferenceSession(path, sess_options=opts)
-        _model_path = path
-        logger.info(f"ONNX model loaded from {path}")
-    except Exception as e:
-        logger.error(f"Failed to load ONNX model: {e}")
-        _ort_session = None
+# ---------------------------------------------------------------------------
+# Application state — shared across the whole process lifetime.
+# ---------------------------------------------------------------------------
 
 
-async def _download_model_from_r2():
-    """Download the latest model from Cloudflare R2 at startup."""
-    r2_url = os.environ.get("R2_MODEL_URL")
-    if not r2_url:
-        return
+class AppState:
+    """Container for objects that must persist across request lifetimes."""
 
-    dest = Path(os.environ.get("ONNX_MODEL_PATH", "models/asl_emg_classifier.onnx"))
-    if dest.exists():
-        logger.info(f"Model already exists at {dest}, skipping download")
-        return
+    pipeline: EMGPipeline
+    torch_model: ASLEMGClassifier | None
+    ort_session: Any | None  # onnxruntime.InferenceSession
+    use_onnx: bool
+    profile_dir: str
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Downloading model from R2: {r2_url}")
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream("GET", r2_url) as response:
-                response.raise_for_status()
-                with open(dest, "wb") as f:
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        f.write(chunk)
-        logger.info(f"Model downloaded to {dest}")
-    except Exception as e:
-        logger.error(f"Failed to download model from R2: {e}")
+    def __init__(self) -> None:
+        self.pipeline = EMGPipeline()
+        self.torch_model = None
+        self.ort_session = None
+        self.use_onnx = False
+        self.profile_dir = PROFILE_DIR
+
+
+app_state = AppState()
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup: download model from R2 (if configured), load ONNX."""
-    await _download_model_from_r2()
-    model_path = os.environ.get("ONNX_MODEL_PATH", "models/asl_emg_classifier.onnx")
-    if os.path.exists(model_path):
-        _load_onnx_model(model_path)
-    else:
-        logger.warning(f"No ONNX model found at {model_path}. Set R2_MODEL_URL or ONNX_MODEL_PATH.")
-    yield
-    logger.info("MAIA server shutting down")
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Startup and shutdown logic executed once per process."""
+
+    # --- Startup -------------------------------------------------------
+    logger.info("Starting EMG-ASL inference server")
+
+    # Ensure the profile directory exists.
+    Path(app_state.profile_dir).mkdir(parents=True, exist_ok=True)
+
+    # Download model from R2 if not present locally and R2_MODEL_URL is set.
+    onnx_path = Path(os.getenv("ONNX_MODEL_PATH", "models/asl_emg_classifier.onnx"))
+    if not onnx_path.exists():
+        r2_url = os.getenv("R2_MODEL_URL", "")
+        if r2_url:
+            logger.info("Downloading model from R2: %s", r2_url)
+            import httpx
+
+            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+            with httpx.stream("GET", r2_url) as resp:
+                with open(onnx_path, "wb") as f:
+                    for chunk in resp.iter_bytes():
+                        f.write(chunk)
+            logger.info("Model downloaded successfully")
+        else:
+            logger.warning("No model found and R2_MODEL_URL not set. Using random weights.")
+
+    # Try loading the ONNX model first.
+    onnx_path = Path(ONNX_MODEL_PATH)
+    if onnx_path.exists():
+        try:
+            global _ort
+            import onnxruntime as ort  # type: ignore[import]
+
+            _ort = ort
+            sess_options = ort.SessionOptions()
+            sess_options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            )
+            app_state.ort_session = ort.InferenceSession(
+                str(onnx_path),
+                sess_options=sess_options,
+                providers=["CPUExecutionProvider"],
+            )
+            app_state.use_onnx = True
+            logger.info("Loaded ONNX model from %s", onnx_path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load ONNX model (%s); falling back to PyTorch.", exc
+            )
+
+    # If ONNX load failed or model not present, try PyTorch.
+    if not app_state.use_onnx:
+        pt_path = Path(PYTORCH_MODEL_PATH)
+        if pt_path.exists():
+            try:
+                app_state.torch_model = ASLEMGClassifier.load(pt_path)
+                logger.info("Loaded PyTorch model from %s", pt_path)
+            except Exception as exc:
+                logger.warning("Failed to load PyTorch model: %s", exc)
+        else:
+            # No model file at all — initialise a random model so the server
+            # can still run (useful during development / calibration-only mode).
+            logger.warning(
+                "No pre-trained model found. Creating untrained model with random weights."
+            )
+            app_state.torch_model = ASLEMGClassifier(
+                input_size=FEATURE_VECTOR_SIZE,
+                num_classes=NUM_CLASSES,
+                label_names=ASL_LABELS,
+            )
+
+    logger.info(
+        "Inference backend: %s", "ONNX" if app_state.use_onnx else "PyTorch"
+    )
+    logger.info("EMG pipeline ready: %s", app_state.pipeline)
+
+    yield  # ← server is running
+
+    # --- Shutdown ------------------------------------------------------
+    logger.info("Shutting down EMG-ASL inference server")
+    app_state.pipeline.reset()
+    if app_state.ort_session is not None:
+        del app_state.ort_session
+    if app_state.torch_model is not None:
+        del app_state.torch_model
+    logger.info("Shutdown complete")
 
 
 # ---------------------------------------------------------------------------
-# FastAPI app
+# FastAPI application
 # ---------------------------------------------------------------------------
+
+
 app = FastAPI(
-    title="MAIA EMG-ASL Inference API",
-    version="0.1.0",
-    description="Real-time ASL recognition from surface EMG signals",
+    title="EMG-ASL Inference Server",
+    description=(
+        "Real-time American Sign Language recognition from 8-channel surface EMG. "
+        "Provides a WebSocket stream endpoint for live inference and REST endpoints "
+        "for user-specific model calibration."
+    ),
+    version="1.0.0",
     lifespan=lifespan,
 )
 
-app.add_middleware(APIKeyMiddleware)
+
+# ---------------------------------------------------------------------------
+# CORS — allow the React Native / Flutter mobile app (any origin during dev).
+# ---------------------------------------------------------------------------
+
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins: list[str] = (
+    ["*"] if _cors_origins_raw == "*" else _cors_origins_raw.split(",")
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ---------------------------------------------------------------------------
-# REST endpoints
+# Mount routers
 # ---------------------------------------------------------------------------
-@app.get("/health")
-async def health():
-    return {"status": "ok", "model_loaded": _ort_session is not None}
+
+from .auth import APIKeyMiddleware, validate_api_key  # noqa: E402
+from .calibration import router as calibration_router  # noqa: E402
+from .websocket import router as ws_router  # noqa: E402
+
+# API key middleware runs before every request.  Exempt paths (health, docs,
+# WebSocket upgrades) are handled inside the middleware itself.
+app.add_middleware(APIKeyMiddleware)
+
+app.include_router(ws_router)
+app.include_router(
+    calibration_router,
+    prefix="/calibrate",
+    tags=["Calibration"],
+    # All calibration routes require a valid API key.
+    dependencies=[Depends(validate_api_key)],
+)
 
 
-@app.get("/info")
-async def info():
-    return {
-        "n_classes": N_CLASSES,
-        "classes": ASL_CLASSES,
-        "sample_rate": SAMPLE_RATE,
-        "window_samples": WINDOW_SAMPLES,
-        "n_channels": N_CHANNELS,
-        "confidence_threshold": CONFIDENCE_THRESHOLD,
-        "model_path": _model_path,
-    }
+# ---------------------------------------------------------------------------
+# Health / info endpoints
+# ---------------------------------------------------------------------------
 
 
-@app.post("/predict")
-async def predict_rest(body: dict):
+@app.get("/", tags=["Meta"], dependencies=[Depends(validate_api_key)])
+async def root() -> JSONResponse:
+    """Server status and runtime information.
+
+    Requires a valid ``X-API-Key`` header.  Use ``GET /health`` for
+    unauthenticated liveness checks.
     """
-    REST endpoint for single window prediction.
-    Body: {"window": [[ch0, ch1, ..., ch7], ...]}  (40 samples × 8 channels)
+    return JSONResponse(
+        {
+            "status": "ok",
+            "inference_backend": "onnx" if app_state.use_onnx else "pytorch",
+            "pipeline": repr(app_state.pipeline),
+            "ws_endpoint": f"ws://{WS_HOST}:{WS_PORT}/stream",
+        }
+    )
+
+
+@app.get("/health", tags=["Meta"])
+async def health() -> JSONResponse:
+    """Lightweight liveness probe for load balancers / container orchestrators.
+
+    Returns ``model_loaded: true`` once either the ONNX session or a PyTorch
+    model has been successfully loaded, allowing readiness-aware checks.
     """
-    if _ort_session is None:
-        raise HTTPException(503, "Model not loaded")
-    window = np.array(body["window"], dtype=np.float32)
-    if window.shape != (WINDOW_SAMPLES, N_CHANNELS):
-        raise HTTPException(400, f"Expected window shape ({WINDOW_SAMPLES}, {N_CHANNELS}), got {window.shape}")
-    ort_input = window.reshape(1, WINDOW_SAMPLES, N_CHANNELS)
-    outputs = _ort_session.run(None, {"input": ort_input})
-    logits = outputs[0][0]
-    probs = _softmax(logits)
-    pred_idx = int(np.argmax(probs))
-    return {
-        "class": ASL_CLASSES[pred_idx],
-        "confidence": float(probs[pred_idx]),
-        "probabilities": {ASL_CLASSES[i]: float(p) for i, p in enumerate(probs)},
-    }
+    model_loaded: bool = app_state.use_onnx or app_state.torch_model is not None
+    return JSONResponse({"status": "ok", "model_loaded": model_loaded})
+
+
+@app.get("/info", tags=["Meta"])
+async def info() -> JSONResponse:
+    """Static metadata about the deployed model and signal-processing config."""
+    return JSONResponse(
+        {
+            "version": "1.0.0",
+            "classes": NUM_CLASSES,
+            "sample_rate": SAMPLE_RATE,
+            "labels": ASL_LABELS,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
-# WebSocket streaming endpoint
+# Programmatic entry point
 # ---------------------------------------------------------------------------
-@app.websocket("/ws/emg")
-async def websocket_emg(ws: WebSocket):
+
+
+def run(host: str = WS_HOST, port: int | None = None) -> None:
+    """Launch the Uvicorn server from Python code (e.g. ``python -m src.api.main``).
+
+    The port is resolved in this order:
+    1. ``port`` argument (if explicitly provided by the caller).
+    2. ``PORT`` environment variable (set by Railway and similar PaaS platforms).
+    3. ``REST_PORT`` constant from ``constants.py`` (default: 8000).
     """
-    Binary WebSocket for real-time EMG inference.
-
-    Client sends:  640 bytes  (40 samples × 8 channels × int16 big-endian)
-    Server sends:  JSON  {"class": "A", "confidence": 0.92, "latency_ms": 12}
-    """
-    await ws.accept()
-    logger.info("WebSocket client connected")
-    try:
-        while True:
-            data = await ws.receive_bytes()
-            t0 = time.perf_counter()
-
-            if len(data) != WINDOW_SAMPLES * N_CHANNELS * 2:
-                await ws.send_json({"error": f"Expected {WINDOW_SAMPLES * N_CHANNELS * 2} bytes, got {len(data)}"})
-                continue
-
-            # Decode big-endian int16
-            n_samples = WINDOW_SAMPLES * N_CHANNELS
-            raw = struct.unpack(f">{n_samples}h", data)
-            window = (np.array(raw, dtype=np.float32) / 32768.0).reshape(WINDOW_SAMPLES, N_CHANNELS)
-
-            if _ort_session is None:
-                await ws.send_json({"error": "Model not loaded"})
-                continue
-
-            ort_input = window.reshape(1, WINDOW_SAMPLES, N_CHANNELS)
-            outputs = _ort_session.run(None, {"input": ort_input})
-            probs = _softmax(outputs[0][0])
-            pred_idx = int(np.argmax(probs))
-            confidence = float(probs[pred_idx])
-            latency_ms = (time.perf_counter() - t0) * 1000
-
-            response = {
-                "class": ASL_CLASSES[pred_idx] if confidence >= CONFIDENCE_THRESHOLD else None,
-                "confidence": confidence,
-                "latency_ms": round(latency_ms, 2),
-            }
-            await ws.send_json(response)
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        await ws.close(code=1011)
+    resolved_port: int = port if port is not None else int(os.getenv("PORT", str(REST_PORT)))
+    uvicorn.run(
+        "src.api.main:app",
+        host=host,
+        port=resolved_port,
+        log_level="info",
+        reload=False,
+    )
 
 
-def _softmax(x: np.ndarray) -> np.ndarray:
-    ex = np.exp(x - x.max())
-    return ex / ex.sum()
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("src.api.main:app", host="0.0.0.0", port=port, reload=False)
+    run()

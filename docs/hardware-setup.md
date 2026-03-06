@@ -1,209 +1,379 @@
-# Hardware Setup — MAIA Neural Band
+# Hardware Setup Guide — MYO Armband
 
-Setup guide for the MAIA Neural Band: unboxing, firmware, BLE pairing, electrode placement, and per-session calibration.
-
----
-
-## What's in the Box
-
-| Component | Qty | Notes |
-|-----------|-----|-------|
-| MAIA Neural Band | 1 | 8-channel sEMG · 200Hz · BLE 5.0 |
-| USB-C charging/flash cable | 1 | Used for charging and firmware updates |
-| Isopropyl alcohol wipes | 10 | Skin prep before electrode contact |
-| Replacement electrode gel pads | 2 sets | If dry electrodes lose conductivity |
+This guide covers setup, SDK installation, electrode placement, and
+troubleshooting for the **Thalmic MYO Armband** used by the EMG-ASL Layer.
 
 ---
 
-## BLE Specification
+## Table of Contents
 
+1. [What You Need](#1-what-you-need)
+2. [MyoConnect + SDK Setup](#2-myoconnect--sdk-setup)
+3. [myo-python Setup](#3-myo-python-setup)
+4. [First Connection Test](#4-first-connection-test)
+5. [Electrode Placement](#5-electrode-placement)
+6. [Direct BLE Mode (Mobile App)](#6-direct-ble-mode-mobile-app)
+7. [Troubleshooting](#7-troubleshooting)
+
+---
+
+## 1. What You Need
+
+| # | Component | Notes |
+|---|-----------|-------|
+| 1 | **Thalmic MYO Armband** | 8-channel sEMG, 200 Hz, int8 output |
+| 2 | **MYO USB Bluetooth Dongle** | Required for laptop/desktop connection via MyoConnect |
+| 3 | **MyoConnect software** | Thalmic Labs host application for macOS/Windows |
+| 4 | **Mac or Windows laptop** | For server-side data collection (myo-python) |
+| 5 | **iPhone (iOS 14+)** | For the React Native app (direct BLE, no dongle needed) |
+| 6 | **USB-A port or USB-A adapter** | For the Bluetooth dongle |
+
+**No custom wiring, soldering, or firmware flashing is required.**
+The MYO Armband is a complete, self-contained 8-channel sEMG device.
+
+---
+
+## 2. MyoConnect + SDK Setup
+
+MyoConnect is the host application that manages the MYO's Bluetooth dongle
+connection. The myo-python SDK communicates through it.
+
+### 2.1 Install MyoConnect
+
+1. Obtain `MyoConnect.app` (macOS) or `MyoConnect_Installer.exe` (Windows)
+   from the Thalmic Labs archive.
+2. Install and launch MyoConnect. A menu bar icon (macOS) or system tray icon
+   (Windows) will appear.
+3. **Plug in the MYO USB Bluetooth dongle**.
+4. Wake the MYO Armband by **double-tapping the MYO logo** or holding it
+   for 2 seconds. The LED pulses white while pairing.
+5. MyoConnect discovers and pairs automatically. The LED turns solid green
+   when paired and connected.
+
+### 2.2 Set SDK Environment Variable
+
+The myo-python library needs to find the Myo C++ SDK dynamic library.
+MyoConnect bundles it inside the application package.
+
+**macOS:**
+```bash
+export MYO_SDK_PATH="/Applications/Myo Connect.app/Contents/Frameworks"
 ```
-Device name:    MAIA-Band
-Service UUID:   12345678-1234-5678-1234-56789abcdef1
-Notify UUID:    12345678-1234-5678-1234-56789abcdef0
 
-Packet format:  16 bytes per packet, 200 packets/sec
-  Bytes  0-1:   Channel 1  (int16 big-endian · range ±32767 = ±1.0V)
-  Bytes  2-3:   Channel 2
-  Bytes  4-5:   Channel 3
-  Bytes  6-7:   Channel 4
-  Bytes  8-9:   Channel 5
-  Bytes 10-11:  Channel 6
-  Bytes 12-13:  Channel 7
-  Bytes 14-15:  Channel 8
-
-Voltage range:  ±1.0V (maps to ±32767 int16)
-Sample rate:    200 Hz
-Window size:    40 samples = 200ms (used by model)
-Hop size:       20 samples = 100ms (50% overlap)
+**Windows (PowerShell):**
+```powershell
+$env:MYO_SDK_PATH = "C:\Program Files (x86)\Myo Connect\sdk"
 ```
 
-### Parsing a packet (Python)
+Add this to your shell profile (`~/.zshrc`, `~/.bash_profile`, or `.env`)
+to avoid re-entering it each session.
+
+### 2.3 Verify MyoConnect is Working
+
+In MyoConnect's Devices panel, the armband should appear with:
+- Battery level indicator
+- Signal strength bar
+- Firmware version (1.1.x or 1.6.x)
+
+If the armband appears but shows "No Signal," re-seat the dongle in a
+different USB port, preferably USB 2.0 (some USB 3.0 ports cause 2.4 GHz
+interference).
+
+---
+
+## 3. myo-python Setup
+
+myo-python is a CFFI Python wrapper around the Myo C++ SDK. It communicates
+with the MYO through MyoConnect — MyoConnect must be running and the armband
+must be connected before any myo-python script can use it.
+
+### 3.1 Install
+
+```bash
+pip install myo-python>=0.2.1 cffi>=1.16
+```
+
+### 3.2 Verify Installation
+
+```bash
+python - <<'EOF'
+import myo
+myo.init()
+hub = myo.Hub()
+print("myo-python OK — hub created successfully")
+hub.stop()
+EOF
+```
+
+Expected output: `myo-python OK — hub created successfully`
+
+If you see `RuntimeError: Hub failed to start`, check that:
+1. MyoConnect is running (menu bar icon visible).
+2. The MYO USB dongle is plugged in.
+3. `MYO_SDK_PATH` points to the directory containing `myo.framework` (macOS)
+   or `myo32.dll` / `myo64.dll` (Windows).
+
+### 3.3 Test EMG Streaming
+
+```bash
+python - <<'EOF'
+import myo, time
+
+class Listener(myo.DeviceListener):
+    def on_connected(self, event):
+        print(f"[MYO] Connected: {event.device_name}")
+        event.device.stream_emg(True)
+    def on_emg(self, event):
+        print(f"[EMG] {list(event.emg)}")
+        return False  # return False stops the hub after first sample
+
+myo.init()
+hub = myo.Hub()
+hub.run(5000, Listener())  # 5 second timeout
+print("Done.")
+EOF
+```
+
+Expected output (one line):
+```
+[MYO] Connected: Myo
+[EMG] [-12, 3, -7, 21, -4, 8, 0, -15]
+Done.
+```
+
+The 8 values are signed int8 (range −128 to 127), representing raw sEMG
+amplitude from each of the 8 electrodes.
+
+### 3.4 Convert int8 to millivolts
+
+The MYO outputs signed int8 values. To convert to approximate millivolts:
 
 ```python
-import struct
-
-def parse_packet(data: bytes) -> list[float]:
-    """16-byte BLE packet → 8 float32 voltages in [-1.0, 1.0]"""
-    channels = struct.unpack(">8h", data)   # big-endian int16 × 8
-    return [v / 32767.0 for v in channels]
+mv = [v / 127.0 * 1250.0 for v in emg_data]
 ```
 
-### Parsing a packet (TypeScript / React Native)
-
-```typescript
-function parsePacket(data: ArrayBuffer): number[] {
-  const view = new DataView(data);
-  return Array.from({ length: 8 }, (_, i) =>
-    view.getInt16(i * 2, false) / 32767.0  // false = big-endian
-  );
-}
-```
+This maps the int8 range [−128, 127] to approximately [−1250, 1250] µV
+(±1.25 mV), which is the typical sEMG amplitude range.
 
 ---
 
-## First-Time Setup
+## 4. First Connection Test
 
-### 1. Charge the band
-
-Connect USB-C. LED behavior:
-- Solid red → charging
-- Solid green → fully charged
-- Blinking red → battery critically low (< 5%)
-
-Charge fully before first use (~90 minutes from empty).
-
-### 2. Flash latest firmware
-
-Firmware files are provided separately by MAIA Biotech.
+### 4.1 Run the Smoke Test
 
 ```bash
-# Power off: hold button 3 seconds until LED goes out
-# Connect USB-C while holding MODE button (band enters DFU mode)
-# LED blinks blue rapidly in DFU mode
+cd /path/to/emg-asl-layer
+source venv/bin/activate
 
-./scripts/flash_firmware.sh --firmware firmware/maia_band_v1.x.x.bin
-# LED blinks green 3× when complete — band reboots automatically
+python scripts/smoke_test.py
 ```
 
-### 3. Power on
+Expected output: `8/8 tests passed`
 
-Short press the button (1 second). LED blinks green twice = booting. Solid green = advertising BLE and ready to pair.
+The smoke test does not require the MYO hardware — it validates the
+signal processing and inference pipeline with synthetic data.
 
-### 4. Pair with iPhone
+### 4.2 Live EMG Stream Verification (Hardware Required)
 
-1. Open MAIA app → **Settings** → **BLE Device Name** → `MAIA-Band`
-2. Tap **Connect** — the app scans and connects automatically
-3. Connected: LED pulses green slowly (1s on, 1s off)
-4. App shows live signal waveforms in **ASL Live** → **Debug Mode**
-
----
-
-## Electrode Placement
-
-See [data-collection-protocol.md](data-collection-protocol.md) for the full placement protocol. Summary:
-
-1. **Clean skin** with isopropyl wipe, dry 30 seconds
-2. **Position band** 5 cm proximal to the wrist crease, centered over the muscle belly
-3. **Secure strap** — snug but two fingers should fit underneath
-4. **Verify signal** — all 8 channels active with < 5µV RMS at rest
-
-```
-DORSAL view — right forearm:
-
-         Elbow  ▲
-                │
-  ┌─────────────────────────────┐
-  │  Ch1   Ch2   Ch3   Ch4      │  ← Extensor digitorum (dorsal)
-  │  Ch5   Ch6   Ch7   Ch8      │  ← Flexor digitorum (volar)
-  └─────────────────────────────┘
-       5 cm from wrist crease
-                │
-         Wrist  ▼
-```
-
-### Channel anatomy reference
-
-| Channel | Muscle group | Primary motion |
-|---------|-------------|----------------|
-| Ch1–Ch2 | Extensor digitorum communis | Finger extension |
-| Ch3–Ch4 | Extensor carpi ulnaris | Wrist extension / ulnar dev. |
-| Ch5–Ch6 | Flexor digitorum superficialis | Finger flexion |
-| Ch7–Ch8 | Flexor carpi radialis | Wrist flexion / radial dev. |
-
----
-
-## Per-Session Calibration
-
-Run before every recording session (takes ~2 minutes):
+With MyoConnect running and the armband connected:
 
 ```bash
-python scripts/calibrate_user.py --user-id <id>
+python scripts/record_session.py \
+  --participant TEST \
+  --output /tmp/ \
+  --labels A \
+  --reps 1 \
+  --duration 5
 ```
 
-What it does:
-1. Records 30s resting baseline (arm relaxed)
-2. Computes per-channel mean + standard deviation
-3. Saves normalization parameters to `data/calibrations/<user_id>_latest.json`
-4. Validates signal quality — fails loudly if any channel is dead or saturated
+This records 5 seconds of channel 'A' and prints sample statistics.
+You should see non-zero variance on most channels.
 
-The calibration file is loaded automatically by the MAIA app and inference server when the user ID is set.
+### 4.3 Signal Quality Check
 
-### Recalibrate when
+Good signal indicators:
+- **At rest (relaxed forearm):** All 8 channels near zero (< ±10 counts)
+- **Light fist clench:** Palmar channels (approx. Ch1–Ch4) spike to ±40–80
+- **Strong fist clench:** Palmar channels spike to ±100 or more
+- **Noise floor:** < 5 counts RMS at rest after notch filter
 
-- Band was removed and replaced (even to the same position)
-- More than 24 hours since last session
-- Signal quality check fails
-- Changing which arm is wearing the band
-
----
-
-## LED Reference
-
-| LED state | Meaning |
-|-----------|---------|
-| Solid red | Charging |
-| Solid green | Fully charged (while plugged in) |
-| Blinks green 2× on boot | Starting up |
-| Slow pulse green (1s/1s) | BLE connected, streaming |
-| Fast blink green | BLE advertising, waiting for connection |
-| Blinks blue rapid | DFU (firmware flash) mode |
-| Solid red (unplugged) | Battery < 10% — charge soon |
-| Blinks red (unplugged) | Battery < 5% — shutting down |
-| No light | Off |
+If channels are flat near zero even during clench:
+- Armband may be too loose — tighten until snug
+- Skin may be dry — wipe electrode contacts with slightly damp cloth
 
 ---
 
-## Troubleshooting
+## 5. Electrode Placement
 
-| Symptom | Likely cause | Fix |
+The MYO Armband is a complete pre-assembled unit — no individual electrode
+preparation is needed. The 8 electrodes are built into the armband and make
+contact with the skin when worn.
+
+### 5.1 Target Position
+
+Place the MYO on the **dominant forearm**, **2–3 cm distal to the elbow
+crease** (toward the wrist), targeting the widest circumferential point of
+the upper forearm where the flexor and extensor muscle bellies are broadest.
+
+```
+ ELBOW                                           WRIST
+   |---- 2-3 cm ----|
+                    ┌────────────────────────┐
+                    │     MYO Armband        │   ← place here
+                    │  (8 electrodes, 360°)  │
+                    └────────────────────────┘
+```
+
+### 5.2 MYO Logo Orientation
+
+The MYO logo indicates electrode 1 (Ch0 in software). Orient the armband so
+the logo faces toward the **inside of the wrist** (palmar side) for
+consistency across sessions.
+
+### 5.3 Muscle Groups Targeted
+
+```
+ RIGHT FOREARM — cross-section, looking from elbow toward wrist
+ Outer ring = forearm surface
+
+                      12 o'clock (DORSAL)
+                          [ Ch6 ]
+               [ Ch5 ]  Ext. Digitorum  [ Ch7 ]
+            10 o'clock   Communis        2 o'clock
+        Ext. Carpi                         Ext. Carpi
+        Radialis Br.                       Radialis Lg.
+
+ RADIAL                                           ULNAR
+ (thumb side)   [ Ch4 ]           [ Ch0 ]    (pinky side)
+                 9 o'clock          3 o'clock
+            Flexor Carpi          Flexor Carpi
+             Radialis              Ulnaris
+
+               [ Ch3 ]  Flexor Digitorum  [ Ch1 ]
+           8 o'clock    Superficialis      4 o'clock
+
+                          [ Ch2 ]
+                      6 o'clock (PALMAR)
+```
+
+### 5.4 Tightening
+
+Tighten the armband until it is snug — all 8 metal electrode pods should
+maintain firm contact with the skin. A loose armband is the single most
+common cause of noisy or flat channels.
+
+- Too loose: flat or low-amplitude signal, high motion artifact
+- Too tight: uncomfortable and may impede blood flow; loosen one click
+- Correct: slight indentation visible after removal; all channels active
+
+### 5.5 Left-Handed Participants
+
+Mirror the diagram (radial and ulnar sides swap). Record `dominant_hand: left`
+in session metadata. No other changes are needed.
+
+### 5.6 Skin Preparation
+
+For long sessions (> 30 minutes):
+1. Wipe the forearm with an isopropyl alcohol wipe (70%). Allow to dry.
+2. Gently abrade with gauze (one or two passes, not harsh).
+3. Allow skin to air dry before fitting the armband.
+
+For standard sessions:
+- Clean, dry skin is sufficient.
+- Avoid lotions or oils — they increase electrode impedance.
+
+---
+
+## 6. Direct BLE Mode (Mobile App)
+
+The iOS React Native app connects **directly to the MYO** via the
+reverse-engineered MYO BLE GATT protocol — no MyoConnect or USB dongle
+required on the phone.
+
+### MYO BLE Protocol Summary
+
+| Resource | UUID |
+|----------|------|
+| Control Service | `d5060001-a904-deb9-4748-2c7f4a124842` |
+| Command Characteristic | `d5060401-a904-deb9-4748-2c7f4a124842` |
+| EMG Service | `d5060005-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 0 | `d5060105-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 1 | `d5060205-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 2 | `d5060305-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 3 | `d5060405-a904-deb9-4748-2c7f4a124842` |
+
+**SET_EMG_MODE command** (written to Command Characteristic before subscribing):
+```
+0x01 0x03 0x02 0x01 0x01
+```
+- `0x01` = command type (set mode)
+- `0x03` = payload size
+- `0x02` = EMG mode: raw filtered (200 Hz, int8)
+- `0x01` = IMU mode: on
+- `0x01` = classifier mode: on
+
+**EMG data format per characteristic:**
+Each notification delivers 2 samples × 4 channels (int8) at ~50 Hz.
+All 4 characteristics together reconstruct 8 channels at 200 Hz.
+
+The app handles this automatically. See
+[`src/bluetooth/BLEManager.ts`](../mobile/react-native/src/bluetooth/BLEManager.ts)
+for the full implementation.
+
+### iOS BLE Permissions
+
+On first launch the app requests Bluetooth permission. Tap "Allow."
+
+If permission was previously denied:
+iOS Settings → Privacy & Security → Bluetooth → MAIA → toggle ON.
+
+### Connecting from the App
+
+1. Wake the MYO armband (double-tap logo; LED pulses white).
+2. Open the MAIA app, tap **Connect to MYO**.
+3. The app scans for a device whose name starts with "Myo" and connects.
+4. The status pill turns green: "MYO Connected."
+5. EMG streaming begins automatically.
+
+Note: If MyoConnect is running on the same phone or laptop and has claimed the
+dongle connection, the phone's direct BLE connection will still work
+independently — the two paths do not conflict.
+
+---
+
+## 7. Troubleshooting
+
+| Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
-| Band won't power on | Dead battery | Charge via USB-C (solid red = charging) |
-| No BLE advertisement | Band is off | Short press button; check battery LED |
-| App can't find band | BLE off on iPhone | Enable Bluetooth in iOS Settings |
-| App connects then immediately disconnects | BLE interference | Move away from 2.4GHz Wi-Fi sources, other BLE devices |
-| One or more flat channels | Poor electrode contact | Re-seat band; re-clean skin; check electrode pad condition |
-| All channels saturated (±1.0V) | Loose connection or firmware issue | Re-seat band; reflash firmware |
-| 60Hz noise on all channels | Power line interference | Move away from CRT monitors, fluorescent lights, power strips |
-| 60Hz noise on individual channels | Broken electrode | Check pad condition; replace if degraded |
-| Signal OK at rest but distorted during sign | Excessive strap tension | Loosen strap — over-tightening restricts blood flow and changes signal |
-| `validate_session` fails SNR check | Low-quality session | Re-run calibration; ensure quiet room and still posture |
-| Firmware flash fails | Band not in DFU mode | Re-enter DFU: hold MODE while connecting USB-C |
+| `Hub failed to start` | MyoConnect not running | Launch MyoConnect, confirm dongle is plugged in |
+| `myo.init()` crash | Wrong `MYO_SDK_PATH` | Set `MYO_SDK_PATH` to the directory containing `myo.framework` (macOS) |
+| No EMG data | `stream_emg(True)` not called | Call `event.device.stream_emg(True)` in `on_connected` |
+| Flat signal on all channels | Armband too loose | Tighten until snug; all electrode pods must contact skin |
+| Noisy signal at rest (> ±20 counts) | Skin dry or dirty | Clean with alcohol wipe; re-seat armband |
+| One channel consistently near zero | Electrode pod not contacting skin | Loosen, rotate slightly, re-tighten |
+| BLE scan timeout on iPhone | Armband asleep | Double-tap MYO logo to wake (LED pulses white) |
+| App can't find "Myo" | iOS Bluetooth disabled | Enable Bluetooth in Control Center; grant permission in Settings |
+| High 60 Hz noise | Powerline interference near dry skin | Clean skin, re-seat armband; notch filter (60 Hz) is applied automatically by the server |
+| Armband disconnects mid-session | Low battery | Charge via micro-USB before session; battery indicator in MyoConnect |
+| Firmware version warnings | Old firmware | Use MyoConnect's firmware update function (Help → Update Firmware) |
 
-### Electrode pad replacement
+### Extended: Flat Channel During Clench
 
-Dry Ag/AgCl pads last approximately 20–30 sessions. Replace when:
-- Resting noise exceeds 5µV on any channel after cleaning
-- Visible wear, cracks, or delamination on the pad surface
+1. Remove and re-seat the armband — rotate it ±1 cm and re-tighten.
+2. Check whether the flat channel corresponds to the extensor side (dorsal);
+   these have lower amplitude than the flexor side. Try a stronger extension
+   gesture (pull wrist back) to confirm the electrode is working.
+3. If the channel is flat for all gestures on multiple tries, the electrode
+   pod may be damaged — contact the MAIA team.
 
-To replace: peel off old pad (gentle pull at edge), clean the metal contact with isopropyl, press new pad firmly for 10 seconds.
+### Extended: No EMG After Connection
 
----
+Ensure `stream_emg(True)` is called explicitly — the MYO does not stream EMG
+by default. The call must happen inside the `on_connected` callback:
 
-## Storage & Care
+```python
+def on_connected(self, event):
+    event.device.stream_emg(True)
+```
 
-- Store in the included case or a dry cloth pouch — avoid extreme temperatures
-- Do not submerge in water — the band is splash-resistant, not waterproof
-- Charge before long storage (> 2 weeks) to prevent battery degradation
-- Keep electrode pads covered when not in use to prevent drying
-- Clean the band housing with a damp cloth — do not use solvents
+Without this call, `on_emg` will never fire even though the device is paired.

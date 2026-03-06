@@ -1,156 +1,338 @@
-#!/usr/bin/env python3
 """
-Train cross-modal EMG-Vision embedding (CLIP-style).
+Training script for the CrossModalASL dual-encoder embedding model.
 
-Aligns EMG feature vectors with MediaPipe hand landmark vectors
-using symmetric InfoNCE loss. Can run self-supervised on synthetic
-EMG+landmark pairs, or supervised on real paired recordings.
+What this script does
+----------------------
+1. Optionally generates synthetic EMG data if the emg-dir is empty.
+2. Calls train_cross_modal() to train the dual-encoder via InfoNCE loss.
+3. After training, loads 20 random EMG windows from the dataset and
+   classifies them via the vision gallery.  Prints per-class hits and
+   overall accuracy as a quick sanity check.
+4. Saves the trained model to {output-dir}/cross_modal_asl.pt and the
+   class gallery to {output-dir}/class_gallery.npy.
 
-Usage:
-    # Synthetic self-supervised (no real data needed)
-    python scripts/train_cross_modal.py --generate-synthetic
+Self-supervised mode (no --video-dir)
+--------------------------------------
+When --video-dir is not provided, the script trains using synthetic
+landmark stand-ins (random unit-vector prototypes per class with small
+noise).  This is useful for integration testing and rapid iteration
+but the resulting embeddings do NOT align with real hand appearance.
 
-    # With real data (paired .npz files that include 'emg' and 'landmarks' keys)
-    python scripts/train_cross_modal.py --emg-dir data/paired/
+Usage (from project root)
+--------------------------
+    # Self-supervised mode (no real video):
+    python scripts/train_cross_modal.py --emg-dir data/raw/synthetic
+
+    # With real paired video (when available):
+    python scripts/train_cross_modal.py \\
+        --emg-dir data/raw \\
+        --video-dir data/video \\
+        --epochs 100 \\
+        --output-dir models/cross_modal
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Add project root to sys.path so that ``from src.*`` imports resolve when
+# this script is executed directly from the project root.
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-
-sys.path.insert(0, str(Path(__file__).parents[1]))
-
-from src.constants import N_CLASSES, ASL_CLASSES, FEATURE_DIM
-from src.data.loader import generate_synthetic_dataset
-from src.signal.features import extract_features
-from src.models.cross_modal_embedding import CrossModalASL
+import torch.nn.functional as F
 
 
-def _make_synthetic_pairs(n_per_class: int = 50, seed: int = 42):
-    """Generate synthetic (emg_features, landmarks) pairs for self-supervised training."""
-    rng = np.random.default_rng(seed)
-    emg_list, lm_list, labels = [], [], []
-
-    for cls_idx in range(N_CLASSES):
-        # Distinct EMG pattern per class
-        pattern = np.zeros(8)
-        active = rng.choice(8, size=rng.integers(2, 5), replace=False)
-        pattern[active] = rng.uniform(0.3, 1.0, len(active))
-
-        # Distinct landmark pattern per class
-        lm_center = rng.normal(0, 0.3, 63).astype(np.float32)
-        lm_center /= np.linalg.norm(lm_center) + 1e-8
-
-        for _ in range(n_per_class):
-            # EMG window → features
-            t = np.linspace(0, 0.2, 40)
-            carrier = np.sin(2 * np.pi * (20 + cls_idx * 3) * t)[:, None]
-            window = (carrier * pattern[None, :] + rng.normal(0, 0.05, (40, 8))).astype(np.float32)
-            feat = extract_features(window)
-            emg_list.append(feat)
-
-            # Landmark with noise
-            lm = lm_center + rng.normal(0, 0.05, 63).astype(np.float32)
-            lm /= np.linalg.norm(lm) + 1e-8
-            lm_list.append(lm)
-            labels.append(cls_idx)
-
-    emg = np.stack(emg_list)
-    lm = np.stack(lm_list)
-    y = np.array(labels, dtype=np.int64)
-    perm = rng.permutation(len(y))
-    return emg[perm], lm[perm], y[perm]
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
 
 
-def _quick_eval(model: CrossModalASL, emg: np.ndarray, lm: np.ndarray, y: np.ndarray, device: str):
-    """Evaluate nearest-neighbor accuracy using class gallery."""
-    model.eval()
-    # Build gallery from landmark prototypes
-    gallery_dict = {}
-    for cls_idx in range(N_CLASSES):
-        mask = y == cls_idx
-        if mask.sum() == 0:
-            continue
-        gallery_dict[cls_idx] = lm[mask]
-    gallery = model.build_class_gallery(gallery_dict).to(device)
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train the CrossModalASL dual-encoder embedding model.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--emg-dir",
+        type=str,
+        required=True,
+        help=(
+            "Directory containing labeled EMG session CSVs "
+            "(or where synthetic data will be generated if empty)."
+        ),
+    )
+    parser.add_argument(
+        "--video-dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional directory containing paired video files. "
+            "If omitted, training runs in self-supervised mode with "
+            "synthetic vision embeddings."
+        ),
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=50,
+        help="Number of training epochs.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Mini-batch size for contrastive training.",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=3e-4,
+        help="Adam learning rate.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="models/",
+        help="Directory where the trained model and gallery will be saved.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Global random seed for reproducibility.",
+    )
+    parser.add_argument(
+        "--eval-samples",
+        type=int,
+        default=20,
+        help="Number of random EMG windows to classify during post-training eval.",
+    )
+    parser.add_argument(
+        "--generate-synthetic",
+        action="store_true",
+        help=(
+            "Generate synthetic EMG data into --emg-dir before training "
+            "(if the directory is empty or does not exist)."
+        ),
+    )
+    return parser.parse_args(argv)
 
-    # Classify EMG
-    emg_t = torch.from_numpy(emg).float().to(device)
-    preds, confs = model.classify_emg(emg_t, gallery)
-    y_t = torch.from_numpy(y).to(device)
-    acc = (preds == y_t).float().mean().item()
+
+# ---------------------------------------------------------------------------
+# Synthetic data generation helper
+# ---------------------------------------------------------------------------
+
+
+def _maybe_generate_synthetic(emg_dir: str, seed: int) -> None:
+    """Generate synthetic EMG CSVs into emg_dir if it is empty."""
+    from src.data.synthetic import generate_dataset
+
+    out_path = Path(emg_dir)
+    existing = list(out_path.glob("*.csv")) if out_path.exists() else []
+
+    if existing:
+        print(
+            f"  Found {len(existing)} existing CSV(s) in '{emg_dir}'. "
+            "Skipping synthetic generation."
+        )
+        return
+
+    print(
+        f"  No CSVs found in '{emg_dir}'. "
+        "Generating 3 synthetic participants ..."
+    )
+    generate_dataset(
+        output_dir=emg_dir,
+        n_participants=3,
+        n_reps=10,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quick post-training evaluation
+# ---------------------------------------------------------------------------
+
+
+def _quick_eval(
+    model_path: str,
+    gallery_path: str,
+    emg_dir: str,
+    n_samples: int,
+    seed: int,
+) -> float:
+    """Classify n_samples random EMG windows and return accuracy.
+
+    Loads the trained model and gallery from disk to verify the full
+    save/load round-trip as well as the classification pipeline.
+
+    Parameters
+    ----------
+    model_path:
+        Path to the saved CrossModalASL .pt checkpoint.
+    gallery_path:
+        Path to the saved class_gallery.npy file.
+    emg_dir:
+        EMG CSV directory (same one used for training).
+    n_samples:
+        How many windows to sample for the evaluation.
+    seed:
+        Random seed.
+
+    Returns
+    -------
+    float
+        Fraction of correctly classified samples in [0, 1].
+    """
+    from src.data.loader import create_windows, load_dataset
+    from src.models.cross_modal_embedding import CrossModalASL
+
+    rng = np.random.default_rng(seed + 1)
+
+    # Load model and gallery.
+    model = CrossModalASL.load(model_path)
+    gallery: dict[str, np.ndarray] = np.load(  # type: ignore[assignment]
+        gallery_path, allow_pickle=True
+    ).item()
+
+    # Load EMG windows.
+    df = load_dataset(emg_dir)
+    from src.utils.constants import ASL_LABELS
+    known = set(ASL_LABELS)
+    df = df[df["label"].isin(known)].reset_index(drop=True)
+
+    windows, str_labels = create_windows(df)
+    N, T, C = windows.shape
+    emg_flat = windows.reshape(N, T * C).astype(np.float32)
+
+    # Sample up to n_samples windows.
+    n_eval = min(n_samples, N)
+    eval_idx = rng.choice(N, size=n_eval, replace=False)
+
+    print(f"\nPost-training evaluation on {n_eval} random windows ...")
+    print(f"  {'True':>12s}  {'Predicted':>12s}  {'Score':>8s}  Match")
+    print("  " + "-" * 50)
+
+    correct = 0
+    for i in eval_idx:
+        true_lbl = str_labels[i]
+        pred_lbl, score = model.classify_emg(emg_flat[i], gallery)
+        match = pred_lbl == true_lbl
+        if match:
+            correct += 1
+        print(
+            f"  {true_lbl:>12s}  {pred_lbl:>12s}  {score:>8.4f}  "
+            + ("OK" if match else "--")
+        )
+
+    acc = correct / n_eval if n_eval > 0 else 0.0
+    print(f"\n  Accuracy: {correct}/{n_eval} = {acc:.4f} ({acc * 100:.1f} %)")
     return acc
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--emg-dir", default=None)
-    parser.add_argument("--generate-synthetic", action="store_true", default=True)
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--embed-dim", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--output-dir", default="models")
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Device: {device}")
 
-    print("Generating synthetic paired data...")
-    emg, lm, y = _make_synthetic_pairs(n_per_class=100)
-    print(f"Pairs: {len(y)} | EMG dim: {emg.shape[1]} | LM dim: {lm.shape[1]}")
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
 
-    split = int(len(y) * 0.85)
-    emg_tr, lm_tr = emg[:split], lm[:split]
-    emg_val, lm_val, y_val = emg[split:], lm[split:], y[split:]
+    t_start = time.time()
 
-    emg_t = torch.from_numpy(emg_tr).float()
-    lm_t = torch.from_numpy(lm_tr).float()
-    train_dl = DataLoader(TensorDataset(emg_t, lm_t), batch_size=args.batch_size, shuffle=True)
+    # Print mode banner.
+    print("=" * 64)
+    print("CrossModalASL -- training script")
+    print("=" * 64)
 
-    model = CrossModalASL(embed_dim=args.embed_dim).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    if args.video_dir is None:
+        print(
+            "\nNo video dir provided. Training in self-supervised mode with "
+            "synthetic vision embeddings. Provide --video-dir for real "
+            "cross-modal training.\n"
+        )
+    else:
+        print(f"\nVideo directory : {args.video_dir}")
 
-    print(f"\n{'Epoch':>6} {'Loss':>10} {'Val Acc':>10}")
-    print("-" * 32)
+    print(f"EMG directory   : {args.emg_dir}")
+    print(f"Epochs          : {args.epochs}")
+    print(f"Batch size      : {args.batch_size}")
+    print(f"Learning rate   : {args.lr}")
+    print(f"Output dir      : {args.output_dir}")
+    print(f"Seed            : {args.seed}")
+    print()
 
-    best_acc = 0.0
-    best_state = None
+    # Optionally generate synthetic data.
+    if args.generate_synthetic:
+        print("Step 0 -- Generating synthetic EMG data ...")
+        _maybe_generate_synthetic(args.emg_dir, args.seed)
+        print()
 
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        total_loss = 0.0
-        for emg_b, lm_b in train_dl:
-            emg_b, lm_b = emg_b.to(device), lm_b.to(device)
-            optimizer.zero_grad()
-            loss = model(emg_b, lm_b)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        scheduler.step()
+    # Verify the EMG directory contains CSVs before proceeding.
+    emg_path = Path(args.emg_dir)
+    csv_files = list(emg_path.glob("*.csv")) if emg_path.exists() else []
+    if not csv_files:
+        print(
+            f"[ERROR] No CSV files found in '{args.emg_dir}'.\n"
+            "        Re-run with --generate-synthetic to create synthetic data,\n"
+            "        or point --emg-dir to a directory containing session CSVs."
+        )
+        sys.exit(1)
 
-        if epoch % 20 == 0 or epoch == args.epochs:
-            val_acc = _quick_eval(model, emg_val, lm_val, y_val, device)
-            avg_loss = total_loss / len(train_dl)
-            print(f"{epoch:>6} {avg_loss:>10.4f} {val_acc:>10.4f}")
-            if val_acc > best_acc:
-                best_acc = val_acc
-                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+    # Import and run training.
+    from src.models.cross_modal_embedding import train_cross_modal
 
-    print(f"\nBest val accuracy: {best_acc:.4f}")
+    print("=" * 64)
+    print("Training")
+    print("=" * 64)
 
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    model.load_state_dict(best_state)
-    model.save(str(out_dir / "cross_modal_embedding.pt"))
-    print(f"Saved: {out_dir / 'cross_modal_embedding.pt'}")
+    model = train_cross_modal(
+        emg_csv_dir=args.emg_dir,
+        video_dir=args.video_dir,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        output_dir=args.output_dir,
+        seed=args.seed,
+    )
+
+    # Confirm artifact paths.
+    out_path = Path(args.output_dir)
+    model_save_path = str(out_path / "cross_modal_asl.pt")
+    gallery_save_path = str(out_path / "class_gallery.npy")
+
+    # Post-training quick evaluation.
+    print()
+    print("=" * 64)
+    print("Quick evaluation")
+    print("=" * 64)
+
+    acc = _quick_eval(
+        model_path=model_save_path,
+        gallery_path=gallery_save_path,
+        emg_dir=args.emg_dir,
+        n_samples=args.eval_samples,
+        seed=args.seed,
+    )
+
+    # Summary.
+    elapsed = time.time() - t_start
+    print()
+    print("=" * 64)
+    print("Done")
+    print("=" * 64)
+    print(f"  Model checkpoint : {model_save_path}")
+    print(f"  Class gallery    : {gallery_save_path}")
+    print(f"  Quick eval acc   : {acc * 100:.1f} %")
+    print(f"  Total time       : {elapsed:.1f} s")
 
 
 if __name__ == "__main__":

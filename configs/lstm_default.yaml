@@ -1,24 +1,53 @@
-# LSTM default training configuration
-model: lstm
-hidden_size: 128
-num_layers: 2
-dropout: 0.3
-bidirectional: false
+# LSTM Classifier -- Default Training Configuration
+# Used by: python scripts/train_gpu_ddp.py --config configs/lstm_default.yaml
+#
+# Equivalent CLI invocation (config loading is on the roadmap; use args today):
+#   python scripts/train_gpu_ddp.py \
+#       --model lstm \
+#       --data-dir data/raw/ \
+#       --epochs 200 \
+#       --batch-size 256 \
+#       --lr 1.0e-3 \
+#       --amp \
+#       --output-dir models/gpu/ \
+#       --wandb \
+#       --wandb-project maia-emg-asl
+#
+# Signal constants come from src/utils/constants.py:
+#   SAMPLE_RATE=200 Hz, WINDOW_SIZE_MS=200 ms -> WINDOW_SIZE_SAMPLES=40
+#   N_CHANNELS=8  ->  input_size = 40 * 8 = 320 (flat)
+
+model:
+  type: lstm
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.3
+  input_size: 320       # 40 samples x 8 channels (flat)
 
 training:
   epochs: 200
   batch_size: 256
-  learning_rate: 0.001
-  scheduler: cosine
-  early_stop_patience: 15
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-5
   grad_clip: 1.0
-
-augmentation:
-  enabled: true
-  strength: medium
+  grad_accum: 1
+  amp: true             # use mixed precision on GPU
+  early_stop_patience: 20
 
 data:
-  window_samples: 40
-  hop_samples: 20
-  feature_dim: 80
-  n_classes: 26
+  window_size_samples: 40
+  overlap: 0.5          # 50% overlap between windows
+  augment: true
+  augment_strength: medium   # light / medium / strong
+  balance_classes: true      # SMOTE oversampling
+
+optimizer:
+  name: adam            # adam / sgd / adamw
+
+scheduler:
+  name: cosine          # cosine / plateau / step
+
+output:
+  model_dir: models/gpu/
+  run_name: lstm_default
+  wandb_project: maia-emg-asl

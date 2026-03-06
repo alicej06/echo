@@ -1,208 +1,557 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View, Text, TextInput, Switch, TouchableOpacity,
-  ScrollView, StyleSheet, Alert, ActivityIndicator,
-} from 'react-native';
-import { getServerConfig, updateServerConfig } from '../config/serverConfig';
+/**
+ * SettingsScreen.tsx
+ * Configuration for server URL, TTS rate, device name, and data management.
+ */
 
-interface ModelInfo {
-  n_classes: number;
-  classes: string[];
-  sample_rate: number;
-  confidence_threshold: number;
+import React, { useCallback, useEffect, useReducer } from 'react';
+import {
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Slider from '@react-native-community/slider';
+
+import { useEMGConnection } from '../hooks/useEMGConnection';
+import { speechEngine } from '../tts/SpeechEngine';
+
+// ---------------------------------------------------------------------------
+// Storage keys (must match those used elsewhere)
+// ---------------------------------------------------------------------------
+
+const KEY_SERVER_URL = 'settings:serverUrl';
+const KEY_DEVICE_NAME = 'settings:deviceName';
+const KEY_TTS_RATE = 'settings:ttsRate';
+const KEY_AUTO_SPEAK = 'settings:autoSpeak';
+const KEY_CALIBRATION_DATA = 'calibration:data';
+
+const DEFAULT_SERVER_URL = 'ws://localhost:8765';
+const DEFAULT_DEVICE_NAME = 'EMG-Band';
+const DEFAULT_TTS_RATE = 1.0;
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+interface SettingRowProps {
+  label: string;
+  children: React.ReactNode;
 }
 
-export default function SettingsScreen() {
-  const cfg = getServerConfig();
-  const [serverUrl, setServerUrl] = useState(cfg.serverUrl);
-  const [apiKey, setApiKey] = useState(cfg.apiKey);
-  const [onDeviceOnly, setOnDeviceOnly] = useState(cfg.onDeviceOnly);
-  const [fallbackToServer, setFallbackToServer] = useState(cfg.fallbackToServer);
-  const [testing, setTesting] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'ok' | 'error'>('idle');
-  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
+const SettingRow: React.FC<SettingRowProps> = ({ label, children }) => (
+  <View style={styles.settingRow}>
+    <Text style={styles.settingLabel}>{label}</Text>
+    <View style={styles.settingControl}>{children}</View>
+  </View>
+);
 
-  const handleSave = useCallback(() => {
-    updateServerConfig({ serverUrl, apiKey, onDeviceOnly, fallbackToServer });
-    Alert.alert('Saved', 'Settings updated successfully');
-  }, [serverUrl, apiKey, onDeviceOnly, fallbackToServer]);
+interface SectionHeaderProps {
+  title: string;
+}
 
-  const handleTestConnection = useCallback(async () => {
-    setTesting(true);
-    setConnectionStatus('idle');
-    setModelInfo(null);
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      const resp = await fetch(`${serverUrl}/health`, {
-        headers: { 'X-API-Key': apiKey },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+const SectionHeader: React.FC<SectionHeaderProps> = ({ title }) => (
+  <Text style={styles.sectionHeader}>{title}</Text>
+);
 
-      if (resp.ok) {
-        setConnectionStatus('ok');
-        // Fetch model info
-        try {
-          const infoResp = await fetch(`${serverUrl}/info`, {
-            headers: { 'X-API-Key': apiKey },
-          });
-          if (infoResp.ok) {
-            setModelInfo(await infoResp.json());
-          }
-        } catch { /* ignore */ }
-      } else {
-        setConnectionStatus('error');
-      }
-    } catch {
-      setConnectionStatus('error');
-    } finally {
-      setTesting(false);
+// ---------------------------------------------------------------------------
+// Reducer
+// ---------------------------------------------------------------------------
+
+type State = {
+  serverUrl: string;
+  deviceName: string;
+  ttsRate: number;
+  autoSpeak: boolean;
+  saving: boolean;
+  hasCalibration: boolean;
+};
+
+type Action =
+  | {
+      type: 'LOAD';
+      serverUrl: string;
+      deviceName: string;
+      ttsRate: number;
+      autoSpeak: boolean;
+      hasCalibration: boolean;
     }
-  }, [serverUrl, apiKey]);
+  | { type: 'SET_SERVER_URL'; value: string }
+  | { type: 'SET_DEVICE_NAME'; value: string }
+  | { type: 'SET_TTS_RATE'; value: number }
+  | { type: 'SET_AUTO_SPEAK'; value: boolean }
+  | { type: 'SET_SAVING'; value: boolean }
+  | { type: 'SET_HAS_CALIBRATION'; value: boolean }
+  | { type: 'RESET' };
+
+const initialState: State = {
+  serverUrl: DEFAULT_SERVER_URL,
+  deviceName: DEFAULT_DEVICE_NAME,
+  ttsRate: DEFAULT_TTS_RATE,
+  autoSpeak: true,
+  saving: false,
+  hasCalibration: false,
+};
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'LOAD':
+      return {
+        ...state,
+        serverUrl: action.serverUrl,
+        deviceName: action.deviceName,
+        ttsRate: action.ttsRate,
+        autoSpeak: action.autoSpeak,
+        hasCalibration: action.hasCalibration,
+      };
+    case 'SET_SERVER_URL':      return { ...state, serverUrl: action.value };
+    case 'SET_DEVICE_NAME':     return { ...state, deviceName: action.value };
+    case 'SET_TTS_RATE':        return { ...state, ttsRate: action.value };
+    case 'SET_AUTO_SPEAK':      return { ...state, autoSpeak: action.value };
+    case 'SET_SAVING':          return { ...state, saving: action.value };
+    case 'SET_HAS_CALIBRATION': return { ...state, hasCalibration: action.value };
+    case 'RESET':               return { ...initialState };
+    default:                    return state;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export default function SettingsScreen() {
+  const router = useRouter();
+  const { setServerUrl, setDeviceName } = useEMGConnection();
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const { serverUrl, deviceName, ttsRate, autoSpeak, saving, hasCalibration } = state;
+
+  // Load persisted settings — single dispatch replaces 5 cascading setStates
+  useEffect(() => {
+    (async () => {
+      const [storedUrl, storedName, storedRate, storedAutoSpeak, calData] =
+        await Promise.all([
+          AsyncStorage.getItem(KEY_SERVER_URL),
+          AsyncStorage.getItem(KEY_DEVICE_NAME),
+          AsyncStorage.getItem(KEY_TTS_RATE),
+          AsyncStorage.getItem(KEY_AUTO_SPEAK),
+          AsyncStorage.getItem(KEY_CALIBRATION_DATA),
+        ]);
+
+      dispatch({
+        type: 'LOAD',
+        serverUrl: storedUrl ?? DEFAULT_SERVER_URL,
+        deviceName: storedName ?? DEFAULT_DEVICE_NAME,
+        ttsRate: storedRate ? parseFloat(storedRate) : DEFAULT_TTS_RATE,
+        autoSpeak: storedAutoSpeak !== null ? storedAutoSpeak === 'true' : true,
+        hasCalibration: !!calData,
+      });
+    })();
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Save
+  // -------------------------------------------------------------------------
+
+  const handleSave = useCallback(async () => {
+    if (!serverUrl.trim()) {
+      Alert.alert('Invalid URL', 'Server URL cannot be empty.');
+      return;
+    }
+
+    dispatch({ type: 'SET_SAVING', value: true });
+    try {
+      await Promise.all([
+        AsyncStorage.setItem(KEY_SERVER_URL, serverUrl.trim()),
+        AsyncStorage.setItem(KEY_DEVICE_NAME, deviceName.trim()),
+        AsyncStorage.setItem(KEY_TTS_RATE, String(ttsRate)),
+        AsyncStorage.setItem(KEY_AUTO_SPEAK, String(autoSpeak)),
+      ]);
+
+      // Propagate to hook singletons
+      await Promise.all([
+        setServerUrl(serverUrl.trim()),
+        setDeviceName(deviceName.trim()),
+      ]);
+      speechEngine.setRate(ttsRate);
+
+      Alert.alert('Saved', 'Settings have been saved successfully.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert('Error', `Failed to save settings: ${msg}`);
+    } finally {
+      dispatch({ type: 'SET_SAVING', value: false });
+    }
+  }, [serverUrl, deviceName, ttsRate, autoSpeak, setServerUrl, setDeviceName]);
+
+  // -------------------------------------------------------------------------
+  // Clear calibration
+  // -------------------------------------------------------------------------
+
+  const handleClearCalibration = useCallback(() => {
+    Alert.alert(
+      'Clear Calibration Data',
+      'This will permanently delete your personal EMG calibration model. You will need to recalibrate before using sign recognition.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await AsyncStorage.removeItem(KEY_CALIBRATION_DATA);
+            dispatch({ type: 'SET_HAS_CALIBRATION', value: false });
+            Alert.alert('Cleared', 'Calibration data has been deleted.');
+          },
+        },
+      ],
+    );
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Clear all data
+  // -------------------------------------------------------------------------
+
+  const handleClearAll = useCallback(() => {
+    Alert.alert(
+      'Reset All Data',
+      'This will delete all settings and calibration data and cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset Everything',
+          style: 'destructive',
+          onPress: async () => {
+            await AsyncStorage.clear();
+            dispatch({ type: 'RESET' });
+            Alert.alert('Reset', 'All data cleared. App is back to defaults.');
+          },
+        },
+      ],
+    );
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
+
+  const rateLabel = ttsRate.toFixed(1) + '×';
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Server Config */}
-      <Text style={styles.sectionHeader}>Server Configuration</Text>
-      <View style={styles.card}>
-        <Text style={styles.label}>Server URL</Text>
-        <TextInput
-          style={styles.input}
-          value={serverUrl}
-          onChangeText={setServerUrl}
-          placeholder="https://maia.railway.app"
-          placeholderTextColor="#666"
-          autoCapitalize="none"
-          keyboardType="url"
-        />
-        <Text style={styles.label}>API Key</Text>
-        <TextInput
-          style={styles.input}
-          value={apiKey}
-          onChangeText={setApiKey}
-          placeholder="your-api-key"
-          placeholderTextColor="#666"
-          secureTextEntry
-          autoCapitalize="none"
-        />
+    <SafeAreaView style={styles.safeArea}>
+      {/* Header */}
+      <View style={styles.header}>
         <TouchableOpacity
-          style={[styles.button, testing && styles.buttonDisabled]}
-          onPress={handleTestConnection}
-          disabled={testing}
+          onPress={() => router.back()}
+          style={styles.backButton}
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
         >
-          {testing ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Test Connection</Text>
-          )}
+          <Ionicons name="chevron-back" size={24} color="#a0a0b0" />
         </TouchableOpacity>
-
-        {connectionStatus === 'ok' && (
-          <Text style={[styles.statusText, styles.statusOk]}>Connected</Text>
-        )}
-        {connectionStatus === 'error' && (
-          <Text style={[styles.statusText, styles.statusError]}>Connection failed</Text>
-        )}
-
-        {modelInfo && (
-          <View style={styles.infoBox}>
-            <Text style={styles.infoText}>Classes: {modelInfo.n_classes}</Text>
-            <Text style={styles.infoText}>Sample rate: {modelInfo.sample_rate} Hz</Text>
-            <Text style={styles.infoText}>Confidence threshold: {modelInfo.confidence_threshold}</Text>
-          </View>
-        )}
+        <Text style={styles.headerTitle}>Settings</Text>
+        <TouchableOpacity
+          onPress={handleSave}
+          disabled={saving}
+          style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+          accessibilityLabel="Save settings"
+          accessibilityRole="button"
+        >
+          <Text style={styles.saveButtonText}>
+            {saving ? 'Saving…' : 'Save'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Inference Mode */}
-      <Text style={styles.sectionHeader}>Inference Mode</Text>
-      <View style={styles.card}>
-        <View style={styles.row}>
-          <View style={styles.rowText}>
-            <Text style={styles.label}>On-Device Only</Text>
-            <Text style={styles.sublabel}>Use ONNX model on device, no network required</Text>
-          </View>
-          <Switch
-            value={onDeviceOnly}
-            onValueChange={setOnDeviceOnly}
-            trackColor={{ false: '#3d3d3d', true: '#4CAF50' }}
-            thumbColor="#fff"
-          />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* -------------------------------------------------------------- */}
+        {/* Connection                                                      */}
+        {/* -------------------------------------------------------------- */}
+        <SectionHeader title="Connection" />
+
+        <View style={styles.card}>
+          <SettingRow label="Server URL">
+            <TextInput
+              style={styles.textInput}
+              value={serverUrl}
+              onChangeText={(v) => dispatch({ type: 'SET_SERVER_URL', value: v })}
+              placeholder={DEFAULT_SERVER_URL}
+              placeholderTextColor="#555577"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              returnKeyType="done"
+              accessibilityLabel="Inference server URL"
+            />
+          </SettingRow>
+
+          <View style={styles.divider} />
+
+          <SettingRow label="Device Name">
+            <TextInput
+              style={styles.textInput}
+              value={deviceName}
+              onChangeText={(v) => dispatch({ type: 'SET_DEVICE_NAME', value: v })}
+              placeholder={DEFAULT_DEVICE_NAME}
+              placeholderTextColor="#555577"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              accessibilityLabel="Bluetooth device name to scan for"
+            />
+          </SettingRow>
         </View>
-        <View style={styles.divider} />
-        <View style={styles.row}>
-          <View style={styles.rowText}>
-            <Text style={styles.label}>Fallback to Server</Text>
-            <Text style={styles.sublabel}>Use Railway server when on-device confidence is low</Text>
-          </View>
-          <Switch
-            value={fallbackToServer}
-            onValueChange={setFallbackToServer}
-            disabled={onDeviceOnly}
-            trackColor={{ false: '#3d3d3d', true: '#4CAF50' }}
-            thumbColor="#fff"
-          />
+
+        {/* -------------------------------------------------------------- */}
+        {/* Text-to-Speech                                                  */}
+        {/* -------------------------------------------------------------- */}
+        <SectionHeader title="Text-to-Speech" />
+
+        <View style={styles.card}>
+          <SettingRow label={`Speech Rate  ${rateLabel}`}>
+            <Slider
+              style={styles.slider}
+              minimumValue={0.5}
+              maximumValue={2.0}
+              step={0.1}
+              value={ttsRate}
+              onValueChange={(val) => {
+                dispatch({ type: 'SET_TTS_RATE', value: parseFloat(val.toFixed(1)) });
+              }}
+              onSlidingComplete={(val) => {
+                const rounded = parseFloat(val.toFixed(1));
+                dispatch({ type: 'SET_TTS_RATE', value: rounded });
+                speechEngine.setRate(rounded);
+              }}
+              minimumTrackTintColor="#6c5ce7"
+              maximumTrackTintColor="#2a2a3e"
+              thumbTintColor="#6c5ce7"
+              accessibilityLabel="Speech rate"
+            />
+          </SettingRow>
+
+          <View style={styles.divider} />
+
+          <SettingRow label="Auto-speak predictions">
+            <Switch
+              value={autoSpeak}
+              onValueChange={(v) => dispatch({ type: 'SET_AUTO_SPEAK', value: v })}
+              trackColor={{ false: '#2a2a3e', true: '#6c5ce7' }}
+              thumbColor={autoSpeak ? '#ffffff' : '#555577'}
+              accessibilityLabel="Auto-speak new sign predictions"
+            />
+          </SettingRow>
         </View>
-      </View>
 
-      {/* Save */}
-      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-        <Text style={styles.saveButtonText}>Save Settings</Text>
-      </TouchableOpacity>
+        {/* -------------------------------------------------------------- */}
+        {/* Data Management                                                 */}
+        {/* -------------------------------------------------------------- */}
+        <SectionHeader title="Data Management" />
 
-      {/* About */}
-      <Text style={styles.sectionHeader}>About</Text>
-      <View style={styles.card}>
-        <Text style={styles.infoText}>MAIA EMG-ASL v0.1.0</Text>
-        <Text style={styles.infoText}>MAIA Biotech — Real-time ASL from sEMG</Text>
-        <Text style={styles.sublabel}>8-channel wrist neural band, 200 Hz, 26 ASL classes</Text>
-      </View>
-    </ScrollView>
+        <View style={styles.card}>
+          <TouchableOpacity
+            onPress={handleClearCalibration}
+            disabled={!hasCalibration}
+            style={[
+              styles.dangerButton,
+              !hasCalibration && styles.dangerButtonDisabled,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Clear calibration data"
+          >
+            <Ionicons
+              name="trash-outline"
+              size={18}
+              color={hasCalibration ? '#e74c3c' : '#555577'}
+            />
+            <Text
+              style={[
+                styles.dangerButtonText,
+                !hasCalibration && styles.dangerButtonTextDisabled,
+              ]}
+            >
+              {hasCalibration
+                ? 'Clear Calibration Data'
+                : 'No Calibration Data Saved'}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          <TouchableOpacity
+            onPress={handleClearAll}
+            style={styles.dangerButton}
+            accessibilityRole="button"
+            accessibilityLabel="Reset all app data"
+          >
+            <Ionicons name="nuclear-outline" size={18} color="#e74c3c" />
+            <Text style={styles.dangerButtonText}>Reset All App Data</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* -------------------------------------------------------------- */}
+        {/* About                                                           */}
+        {/* -------------------------------------------------------------- */}
+        <SectionHeader title="About" />
+        <View style={styles.card}>
+          <View style={styles.aboutRow}>
+            <Text style={styles.aboutLabel}>App</Text>
+            <Text style={styles.aboutValue}>EMG ASL</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.aboutRow}>
+            <Text style={styles.aboutLabel}>Version</Text>
+            <Text style={styles.aboutValue}>1.0.0</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.aboutRow}>
+            <Text style={styles.aboutLabel}>Organisation</Text>
+            <Text style={styles.aboutValue}>MAIA Biotech</Text>
+          </View>
+        </View>
+
+        <View style={styles.bottomSpacer} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#121212' },
-  content: { padding: 16, paddingBottom: 48 },
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#0f0f1a',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  saveButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#6c5ce7',
+    borderRadius: 10,
+  },
+  saveButtonDisabled: {
+    opacity: 0.5,
+  },
+  saveButtonText: {
+    color: '#ffffff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    gap: 4,
+  },
   sectionHeader: {
-    color: '#aaa', fontSize: 12, fontWeight: '600',
-    textTransform: 'uppercase', letterSpacing: 1,
-    marginTop: 24, marginBottom: 8, marginLeft: 4,
+    color: '#6c5ce7',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+    marginTop: 20,
+    marginBottom: 6,
+    paddingLeft: 4,
   },
   card: {
-    backgroundColor: '#1e1e1e', borderRadius: 12,
-    padding: 16, marginBottom: 8,
+    backgroundColor: '#1e1e2e',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
-  label: { color: '#fff', fontSize: 14, fontWeight: '500', marginBottom: 6 },
-  sublabel: { color: '#888', fontSize: 12, marginTop: 2 },
-  input: {
-    backgroundColor: '#2a2a2a', color: '#fff',
-    borderRadius: 8, padding: 12, marginBottom: 12,
-    fontSize: 14, borderWidth: 1, borderColor: '#333',
+  divider: {
+    height: 1,
+    backgroundColor: '#2a2a3e',
+    marginHorizontal: 16,
   },
-  button: {
-    backgroundColor: '#4CAF50', borderRadius: 8,
-    padding: 12, alignItems: 'center', marginTop: 4,
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
   },
-  buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
-  statusText: { textAlign: 'center', marginTop: 8, fontWeight: '500' },
-  statusOk: { color: '#4CAF50' },
-  statusError: { color: '#f44336' },
-  infoBox: {
-    backgroundColor: '#2a2a2a', borderRadius: 8,
-    padding: 12, marginTop: 12,
+  settingLabel: {
+    color: '#c0c0d0',
+    fontSize: 15,
+    flex: 1,
   },
-  infoText: { color: '#ccc', fontSize: 13, marginBottom: 4 },
-  row: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', paddingVertical: 4,
+  settingControl: {
+    flex: 1,
+    alignItems: 'flex-end',
   },
-  rowText: { flex: 1, paddingRight: 16 },
-  divider: { height: 1, backgroundColor: '#333', marginVertical: 12 },
-  saveButton: {
-    backgroundColor: '#2196F3', borderRadius: 12,
-    padding: 16, alignItems: 'center', marginTop: 16, marginBottom: 8,
+  textInput: {
+    backgroundColor: '#2a2a3e',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    color: '#ffffff',
+    fontSize: 14,
+    width: '100%',
+    textAlign: 'right',
   },
-  saveButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  slider: {
+    width: '100%',
+    height: 32,
+  },
+  dangerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  dangerButtonDisabled: {
+    opacity: 0.5,
+  },
+  dangerButtonText: {
+    color: '#e74c3c',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  dangerButtonTextDisabled: {
+    color: '#555577',
+  },
+  aboutRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  aboutLabel: {
+    color: '#a0a0b0',
+    fontSize: 15,
+  },
+  aboutValue: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  bottomSpacer: {
+    height: 48,
+  },
 });

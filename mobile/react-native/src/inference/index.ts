@@ -1,20 +1,26 @@
 /**
- * MAIA On-Device Inference
+ * inference/index.ts
+ * Public surface of the on-device inference module.
  *
- * Quick start:
- *   import { ONNXInference, EMGWindowBuffer } from './inference';
+ * Typical usage:
  *
- *   const engine = await ONNXInference.getInstance();
- *   const buffer = new EMGWindowBuffer(async (window) => {
- *     const result = await engine.predict(window);
- *     if (result?.class) console.log('ASL:', result.class);
- *   });
+ *   import { onDeviceInference, EMGWindowBuffer } from '../inference';
  *
- *   // On each BLE packet (DataView of 16 bytes):
- *   buffer.feed(blePacket);
+ *   // At app start / screen mount:
+ *   await onDeviceInference.loadModel();
+ *   const buffer = new EMGWindowBuffer();
+ *
+ *   // Inside the BLE data callback:
+ *   const windows = buffer.ingestBytes(blePacket);
+ *   for (const window of windows) {
+ *     const result = await onDeviceInference.predict(window);
+ *     if (result) console.log(result.label, result.confidence);
+ *   }
+ *
+ *   // On unmount:
+ *   onDeviceInference.dispose();
+ *   buffer.reset();
  */
 
-export { ONNXInference } from './ONNXInference';
-export type { PredictionResult } from './ONNXInference';
+export { onDeviceInference } from './ONNXInference';
 export { EMGWindowBuffer } from './EMGWindowBuffer';
-export type { WindowCallback } from './EMGWindowBuffer';
