@@ -1,81 +1,41 @@
 {
   "expo": {
-    "name": "EMG ASL",
-    "slug": "emg-asl",
-    "version": "1.0.0",
+    "name": "MAIA ASL",
+    "slug": "maia-emg-asl",
+    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#1a1a2e"
+      "backgroundColor": "#121212"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "org.maia.emgasl",
-      "buildNumber": "1",
+      "bundleIdentifier": "com.maiatech.emgasl",
       "infoPlist": {
-        "NSBluetoothAlwaysUsageDescription": "EMG ASL needs Bluetooth to connect to the EMG armband for sign language recognition.",
-        "NSBluetoothPeripheralUsageDescription": "EMG ASL needs Bluetooth to communicate with the EMG sensor armband.",
-        "UIBackgroundModes": [
-          "bluetooth-central"
-        ]
+        "NSBluetoothAlwaysUsageDescription": "MAIA needs Bluetooth to connect to the neural band",
+        "NSBluetoothPeripheralUsageDescription": "MAIA needs Bluetooth to connect to the neural band"
       }
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a1a2e"
-      },
-      "package": "org.maia.emgasl",
-      "versionCode": 1,
-      "permissions": [
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_SCAN",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.BLUETOOTH_ADVERTISE",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
-      ]
+      "package": "com.maiatech.emgasl"
     },
-    "web": {
-      "bundler": "metro",
-      "output": "static",
-      "favicon": "./assets/favicon.png"
-    },
+    "scheme": "maia-emg-asl",
     "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-asset",
       [
         "react-native-ble-plx",
         {
-          "isBackgroundEnabled": true,
-          "modes": ["peripheral", "central"],
-          "bluetoothAlwaysPermission": "Allow EMG ASL to connect to the EMG armband for sign language recognition."
+          "isBackgroundEnabled": false,
+          "neverForBackground": true,
+          "modes": []
         }
-      ],
-      [
-        "expo-speech",
-        {
-          "microphonePermission": false
-        }
-      ],
-      "expo-router"
+      ]
     ],
     "experiments": {
       "typedRoutes": true
-    },
-    "scheme": "emg-asl",
-    "extra": {
-      "router": {
-        "origin": false
-      },
-      "eas": {
-        "projectId": "emg-asl-maia"
-      }
     }
   }
 }
