@@ -8,23 +8,23 @@
  *     useEMGConnection();
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Device, Subscription } from 'react-native-ble-plx';
+import { useCallback, useEffect, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Device } from "react-native-ble-plx";
 
-import { bleManager, ConnectionStatus } from '../bluetooth/BLEManager';
-import { EMGStreamProcessor } from '../bluetooth/EMGStream';
-import { inferenceClient } from '../inference/InferenceClient';
-import { speechEngine } from '../tts/SpeechEngine';
+import { bleManager, ConnectionStatus } from "../bluetooth/BLEManager";
+import { EMGStreamProcessor } from "../bluetooth/EMGStream";
+import { inferenceClient } from "../inference/InferenceClient";
+import { speechEngine } from "../tts/SpeechEngine";
 
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
 
-const KEY_SERVER_URL = 'settings:serverUrl';
-const KEY_DEVICE_NAME = 'settings:deviceName';
-const DEFAULT_SERVER_URL = 'ws://localhost:8765';
-const DEFAULT_DEVICE_NAME = 'EMG-Band';
+const KEY_SERVER_URL = "settings:serverUrl";
+const KEY_DEVICE_NAME = "settings:deviceName";
+const DEFAULT_SERVER_URL = "ws://localhost:8765";
+const DEFAULT_DEVICE_NAME = "EMG-Band";
 
 // ---------------------------------------------------------------------------
 // Hook return type
@@ -52,7 +52,7 @@ export interface EMGConnectionState {
 
 export function useEMGConnection(): EMGConnectionState {
   const [connectionStatus, setConnectionStatus] =
-    useState<ConnectionStatus>('disconnected');
+    useState<ConnectionStatus>("disconnected");
   const [lastLabel, setLastLabel] = useState<string | null>(null);
   const [lastConfidence, setLastConfidence] = useState(0);
   const [history, setHistory] = useState<string[]>([]);
@@ -63,7 +63,7 @@ export function useEMGConnection(): EMGConnectionState {
   // Refs to avoid stale closures inside callbacks
   const processorRef = useRef<EMGStreamProcessor | null>(null);
   const deviceRef = useRef<Device | null>(null);
-  const emgSubRef = useRef<Subscription | null>(null);
+  const emgSubRef = useRef<boolean>(false);
   const predUnsubRef = useRef<(() => void) | null>(null);
   const statusUnsubRef = useRef<(() => void) | null>(null);
   const isCalibratingRef = useRef(false);
@@ -115,8 +115,7 @@ export function useEMGConnection(): EMGConnectionState {
     predUnsubRef.current?.();
     predUnsubRef.current = null;
 
-    emgSubRef.current?.remove();
-    emgSubRef.current = null;
+    emgSubRef.current = false;
 
     processorRef.current?.reset();
     processorRef.current = null;
@@ -134,7 +133,7 @@ export function useEMGConnection(): EMGConnectionState {
   // -------------------------------------------------------------------------
 
   const connect = useCallback(async () => {
-    if (connectionStatus === 'connected' || connectionStatus === 'connecting') {
+    if (connectionStatus === "connected" || connectionStatus === "connecting") {
       return;
     }
 
@@ -152,21 +151,23 @@ export function useEMGConnection(): EMGConnectionState {
 
       // 3. Register prediction callback
       predUnsubRef.current?.();
-      predUnsubRef.current = inferenceClient.onPrediction((label, confidence) => {
-        if (!mountedRef.current || isCalibratingRef.current) return;
+      predUnsubRef.current = inferenceClient.onPrediction(
+        (label, confidence) => {
+          if (!mountedRef.current || isCalibratingRef.current) return;
 
-        setLastLabel(label);
-        setLastConfidence(confidence);
-        setHistory((prev) => [label, ...prev].slice(0, 5));
+          setLastLabel(label);
+          setLastConfidence(confidence);
+          setHistory((prev) => [label, ...prev].slice(0, 5));
 
-        speechEngine.speak(label);
-      });
+          speechEngine.speak(label);
+        },
+      );
 
       // 4. Set up EMG stream processor
       const processor = new EMGStreamProcessor();
       processorRef.current = processor;
 
-      processor.on('window', (window) => {
+      processor.on("window", (window) => {
         if (inferenceClient.isConnected()) {
           inferenceClient.sendWindow(window);
         }
@@ -177,12 +178,12 @@ export function useEMGConnection(): EMGConnectionState {
       deviceRef.current = device;
 
       // 6. Subscribe to EMG notifications
-      const sub = bleManager.subscribeToEMG(device, (bytes) => {
+      await bleManager.subscribeToEMG(device, (bytes) => {
         processorRef.current?.ingestBytes(bytes);
       });
-      emgSubRef.current = sub;
+      emgSubRef.current = true;
     } catch (err) {
-      console.error('[useEMGConnection] connect error:', err);
+      console.error("[useEMGConnection] connect error:", err);
       // Status will have been set to 'error' by BLEManager
     }
   }, [connectionStatus]);

@@ -11,20 +11,20 @@
  * samples each (default 5), so the user makes 130 captures total.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useCallback, useEffect, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import { EMGStreamProcessor } from '../bluetooth/EMGStream';
+import { EMGStreamProcessor } from "../bluetooth/EMGStream";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const ASL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+const ASL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 const REPS_PER_LETTER = 5;
 const TOTAL_SAMPLES = ASL_ALPHABET.length * REPS_PER_LETTER; // 130
 
-const KEY_CALIBRATION_DATA = 'calibration:data';
+const KEY_CALIBRATION_DATA = "calibration:data";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,7 +77,7 @@ export function useCalibration(
   const letterIndex = Math.floor(currentPromptIndex / REPS_PER_LETTER);
   const repNumber = (currentPromptIndex % REPS_PER_LETTER) + 1;
   const currentPrompt = isCalibrating
-    ? ASL_ALPHABET[letterIndex] ?? null
+    ? (ASL_ALPHABET[letterIndex] ?? null)
     : null;
   const progress = TOTAL_SAMPLES > 0 ? samplesRecorded / TOTAL_SAMPLES : 0;
 
@@ -93,8 +93,8 @@ export function useCalibration(
 
       // Create a calibration session on the server
       const response = await fetch(`${serverUrl}/calibrate/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId }),
       });
 
@@ -104,8 +104,8 @@ export function useCalibration(
         );
       }
 
-      const data = await response.json();
-      sessionIdRef.current = data.session_id ?? null;
+      const data = (await response.json()) as Record<string, unknown>;
+      sessionIdRef.current = (data.session_id as string | undefined) ?? null;
 
       if (mountedRef.current) {
         setIsCalibrating(true);
@@ -125,7 +125,7 @@ export function useCalibration(
       const window = processorRef.current?.getWindow();
       if (!window) {
         throw new Error(
-          'No EMG window available — ensure the armband is connected.',
+          "No EMG window available — ensure the armband is connected.",
         );
       }
 
@@ -139,8 +139,8 @@ export function useCalibration(
       };
 
       const response = await fetch(`${serverUrl}/calibrate/sample`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
@@ -162,41 +162,42 @@ export function useCalibration(
   // finishCalibration
   // -------------------------------------------------------------------------
 
-  const finishCalibration = useCallback(async (): Promise<CalibrationStats | null> => {
-    if (!sessionIdRef.current) return null;
+  const finishCalibration =
+    useCallback(async (): Promise<CalibrationStats | null> => {
+      if (!sessionIdRef.current) return null;
 
-    const response = await fetch(`${serverUrl}/calibrate/finish`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: sessionIdRef.current,
-        user_id: userIdRef.current,
-      }),
-    });
+      const response = await fetch(`${serverUrl}/calibrate/finish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          user_id: userIdRef.current,
+        }),
+      });
 
-    if (!response.ok) {
-      throw new Error(`Calibration finish failed: ${response.status}`);
-    }
+      if (!response.ok) {
+        throw new Error(`Calibration finish failed: ${response.status}`);
+      }
 
-    const stats: CalibrationStats = await response.json();
+      const stats = (await response.json()) as CalibrationStats;
 
-    // Persist the calibration metadata locally
-    await AsyncStorage.setItem(
-      KEY_CALIBRATION_DATA,
-      JSON.stringify({
-        userId: userIdRef.current,
-        sessionId: sessionIdRef.current,
-        completedAt: new Date().toISOString(),
-        stats,
-      }),
-    );
+      // Persist the calibration metadata locally
+      await AsyncStorage.setItem(
+        KEY_CALIBRATION_DATA,
+        JSON.stringify({
+          userId: userIdRef.current,
+          sessionId: sessionIdRef.current,
+          completedAt: new Date().toISOString(),
+          stats,
+        }),
+      );
 
-    if (mountedRef.current) {
-      setIsCalibrating(false);
-    }
+      if (mountedRef.current) {
+        setIsCalibrating(false);
+      }
 
-    return stats;
-  }, [serverUrl]);
+      return stats;
+    }, [serverUrl]);
 
   // -------------------------------------------------------------------------
   // resetCalibration

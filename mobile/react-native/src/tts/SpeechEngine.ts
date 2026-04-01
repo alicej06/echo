@@ -8,14 +8,14 @@
  *   - Safe stop that also drains the queue.
  */
 
-import * as Speech from 'expo-speech';
+import * as Speech from "expo-speech";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const DEFAULT_RATE = 1.0;
-const DEFAULT_LANGUAGE = 'en-US';
+const DEFAULT_LANGUAGE = "en-US";
 const MIN_RATE = 0.5;
 const MAX_RATE = 2.0;
 
@@ -108,8 +108,8 @@ export class ASLSpeechEngine {
         this._currentlySpoken = null;
         this.advance();
       },
-      onError: (err) => {
-        console.error('[SpeechEngine] TTS error:', err);
+      onError: (err: Error) => {
+        console.error("[SpeechEngine] TTS error:", err);
         this.speaking = false;
         this._currentlySpoken = null;
         this.advance(); // continue draining queue even after error

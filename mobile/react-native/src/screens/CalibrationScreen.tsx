@@ -8,7 +8,7 @@
  *   5. Persists result to AsyncStorage
  */
 
-import React, { useCallback, useEffect, useReducer, useRef } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef } from "react";
 import {
   Alert,
   Animated,
@@ -20,30 +20,30 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+} from "react-native";
+import { useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
-import { CalibrationPrompt } from '../components/CalibrationPrompt';
+import { CalibrationPrompt } from "../components/CalibrationPrompt";
 import {
   useCalibration,
   ASL_ALPHABET,
   REPS_PER_LETTER,
   TOTAL_SAMPLES,
   type CalibrationStats,
-} from '../hooks/useCalibration';
-import { useEMGConnection } from '../hooks/useEMGConnection';
-import type { EMGStreamProcessor } from '../bluetooth/EMGStream';
+} from "../hooks/useCalibration";
+import { useEMGConnection } from "../hooks/useEMGConnection";
+import type { EMGStreamProcessor } from "../bluetooth/EMGStream";
 
 // ---------------------------------------------------------------------------
 // Phase types
 // ---------------------------------------------------------------------------
 
 type Phase =
-  | 'idle'        // intro / name entry
-  | 'countdown'   // 3-2-1 before capture
-  | 'calibrating' // actively stepping through signs
-  | 'done';       // results summary
+  | "idle" // intro / name entry
+  | "countdown" // 3-2-1 before capture
+  | "calibrating" // actively stepping through signs
+  | "done"; // results summary
 
 const COUNTDOWN_FROM = 3;
 
@@ -60,17 +60,17 @@ type State = {
 };
 
 type Action =
-  | { type: 'START_COUNTDOWN' }
-  | { type: 'TICK'; remaining: number }
-  | { type: 'SET_PHASE'; phase: Phase }
-  | { type: 'SET_USER_ID'; userId: string }
-  | { type: 'FINISH'; stats: CalibrationStats }
-  | { type: 'SET_BUSY'; busy: boolean }
-  | { type: 'RESET' };
+  | { type: "START_COUNTDOWN" }
+  | { type: "TICK"; remaining: number }
+  | { type: "SET_PHASE"; phase: Phase }
+  | { type: "SET_USER_ID"; userId: string }
+  | { type: "FINISH"; stats: CalibrationStats }
+  | { type: "SET_BUSY"; busy: boolean }
+  | { type: "RESET" };
 
 const initialState: State = {
-  phase: 'idle',
-  userId: '',
+  phase: "idle",
+  userId: "",
   countdown: COUNTDOWN_FROM,
   stats: null,
   busyCapturing: false,
@@ -78,19 +78,24 @@ const initialState: State = {
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
-    case 'START_COUNTDOWN':
-      return { ...state, busyCapturing: true, phase: 'countdown', countdown: COUNTDOWN_FROM };
-    case 'TICK':
+    case "START_COUNTDOWN":
+      return {
+        ...state,
+        busyCapturing: true,
+        phase: "countdown",
+        countdown: COUNTDOWN_FROM,
+      };
+    case "TICK":
       return { ...state, countdown: action.remaining };
-    case 'SET_PHASE':
+    case "SET_PHASE":
       return { ...state, phase: action.phase };
-    case 'SET_USER_ID':
+    case "SET_USER_ID":
       return { ...state, userId: action.userId };
-    case 'FINISH':
-      return { ...state, stats: action.stats, phase: 'done' };
-    case 'SET_BUSY':
+    case "FINISH":
+      return { ...state, stats: action.stats, phase: "done" };
+    case "SET_BUSY":
       return { ...state, busyCapturing: action.busy };
-    case 'RESET':
+    case "RESET":
       return { ...initialState };
     default:
       return state;
@@ -143,7 +148,7 @@ export default function CalibrationScreen() {
 
   const letterIndex = Math.floor(samplesRecorded / REPS_PER_LETTER);
   const repNumber = (samplesRecorded % REPS_PER_LETTER) + 1;
-  const currentSign = ASL_ALPHABET[letterIndex] ?? 'Z';
+  const currentSign = ASL_ALPHABET[letterIndex] ?? "Z";
 
   // -------------------------------------------------------------------------
   // Start calibration
@@ -151,24 +156,24 @@ export default function CalibrationScreen() {
 
   const handleStart = useCallback(async () => {
     if (!userId.trim()) {
-      Alert.alert('Name Required', 'Please enter your name or ID to begin.');
+      Alert.alert("Name Required", "Please enter your name or ID to begin.");
       return;
     }
 
-    if (connectionStatus !== 'connected') {
+    if (connectionStatus !== "connected") {
       Alert.alert(
-        'Not Connected',
-        'Please connect the EMG armband before calibrating.',
+        "Not Connected",
+        "Please connect the EMG armband before calibrating.",
       );
       return;
     }
 
     try {
       await startSession(userId.trim());
-      dispatch({ type: 'SET_PHASE', phase: 'calibrating' });
+      dispatch({ type: "SET_PHASE", phase: "calibrating" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert('Error', `Failed to start calibration: ${msg}`);
+      Alert.alert("Error", `Failed to start calibration: ${msg}`);
     }
   }, [userId, connectionStatus, startSession]);
 
@@ -184,23 +189,24 @@ export default function CalibrationScreen() {
       const newTotal = samplesRecorded + 1;
       if (newTotal >= TOTAL_SAMPLES) {
         const result = await finishCalibration();
-        if (mountedRef.current) dispatch({ type: 'FINISH', stats: result });
+        if (mountedRef.current && result !== null)
+          dispatch({ type: "FINISH", stats: result });
       } else {
-        dispatch({ type: 'SET_PHASE', phase: 'calibrating' });
+        dispatch({ type: "SET_PHASE", phase: "calibrating" });
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert('Capture Error', msg);
-      dispatch({ type: 'SET_PHASE', phase: 'calibrating' });
+      Alert.alert("Capture Error", msg);
+      dispatch({ type: "SET_PHASE", phase: "calibrating" });
     } finally {
-      if (mountedRef.current) dispatch({ type: 'SET_BUSY', busy: false });
+      if (mountedRef.current) dispatch({ type: "SET_BUSY", busy: false });
     }
   }, [currentSign, recordSample, samplesRecorded, finishCalibration]);
 
   const startCountdown = useCallback(() => {
-    if (phase !== 'calibrating' || busyCapturing) return;
+    if (phase !== "calibrating" || busyCapturing) return;
 
-    dispatch({ type: 'START_COUNTDOWN' }); // sets busyCapturing, phase, countdown atomically
+    dispatch({ type: "START_COUNTDOWN" }); // sets busyCapturing, phase, countdown atomically
 
     let remaining = COUNTDOWN_FROM;
 
@@ -215,7 +221,7 @@ export default function CalibrationScreen() {
 
       remaining -= 1;
       if (!mountedRef.current) return;
-      dispatch({ type: 'TICK', remaining });
+      dispatch({ type: "TICK", remaining });
 
       if (remaining <= 0) {
         if (countdownTimer.current) clearInterval(countdownTimer.current);
@@ -233,16 +239,16 @@ export default function CalibrationScreen() {
 
   const handleReset = useCallback(() => {
     Alert.alert(
-      'Clear Calibration',
-      'This will delete all saved calibration data. Continue?',
+      "Clear Calibration",
+      "This will delete all saved calibration data. Continue?",
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: "Cancel", style: "cancel" },
         {
-          text: 'Clear',
-          style: 'destructive',
+          text: "Clear",
+          style: "destructive",
           onPress: async () => {
             await resetCalibration();
-            if (mountedRef.current) dispatch({ type: 'RESET' });
+            if (mountedRef.current) dispatch({ type: "RESET" });
           },
         },
       ],
@@ -261,8 +267,8 @@ export default function CalibrationScreen() {
       <Ionicons name="hand-left-outline" size={72} color="#6c5ce7" />
       <Text style={styles.idleTitle}>Calibrate Your Signs</Text>
       <Text style={styles.idleBody}>
-        We'll walk you through all 26 ASL letters.{'\n'}
-        Hold each sign steady and tap "Hold Sign" when prompted.{'\n\n'}
+        We'll walk you through all 26 ASL letters.{"\n"}
+        Hold each sign steady and tap "Hold Sign" when prompted.{"\n\n"}
         This takes about 5–10 minutes.
       </Text>
 
@@ -271,13 +277,13 @@ export default function CalibrationScreen() {
         placeholder="Your name or user ID"
         placeholderTextColor="#555577"
         value={userId}
-        onChangeText={(v) => dispatch({ type: 'SET_USER_ID', userId: v })}
+        onChangeText={(v) => dispatch({ type: "SET_USER_ID", userId: v })}
         autoCapitalize="none"
         returnKeyType="done"
         accessibilityLabel="User name or ID"
       />
 
-      {connectionStatus !== 'connected' && (
+      {connectionStatus !== "connected" && (
         <View style={styles.warningBox}>
           <Ionicons name="warning-outline" size={18} color="#f39c12" />
           <Text style={styles.warningText}>
@@ -289,10 +295,10 @@ export default function CalibrationScreen() {
       <TouchableOpacity
         style={[
           styles.primaryButton,
-          connectionStatus !== 'connected' && styles.buttonDisabled,
+          connectionStatus !== "connected" && styles.buttonDisabled,
         ]}
         onPress={handleStart}
-        disabled={connectionStatus !== 'connected'}
+        disabled={connectionStatus !== "connected"}
         accessibilityRole="button"
         accessibilityLabel="Start calibration"
       >
@@ -310,7 +316,7 @@ export default function CalibrationScreen() {
           { transform: [{ scale: countdownAnim }] },
         ]}
       >
-        {countdown > 0 ? countdown : 'GO!'}
+        {countdown > 0 ? countdown : "GO!"}
       </Animated.Text>
       <Text style={styles.countdownSign}>Sign: {currentSign}</Text>
     </View>
@@ -352,7 +358,12 @@ export default function CalibrationScreen() {
                       styles.statFill,
                       {
                         width: `${Math.round(val * 100)}%`,
-                        backgroundColor: val > 0.75 ? '#2ecc71' : val > 0.5 ? '#f39c12' : '#e74c3c',
+                        backgroundColor:
+                          val > 0.75
+                            ? "#2ecc71"
+                            : val > 0.5
+                              ? "#f39c12"
+                              : "#e74c3c",
                       },
                     ]}
                   />
@@ -365,7 +376,7 @@ export default function CalibrationScreen() {
 
         <TouchableOpacity
           style={styles.primaryButton}
-          onPress={() => router.push('/')}
+          onPress={() => router.push("/")}
           accessibilityRole="button"
         >
           <Text style={styles.primaryButtonText}>Start Using EMG ASL</Text>
@@ -388,7 +399,7 @@ export default function CalibrationScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {phase !== 'done' && (
+      {phase !== "done" && (
         <TouchableOpacity
           onPress={() => router.back()}
           style={styles.backButton}
@@ -399,10 +410,10 @@ export default function CalibrationScreen() {
         </TouchableOpacity>
       )}
 
-      {phase === 'idle' && renderIdle()}
-      {phase === 'countdown' && renderCountdown()}
-      {phase === 'calibrating' && renderCalibrating()}
-      {phase === 'done' && renderDone()}
+      {phase === "idle" && renderIdle()}
+      {phase === "countdown" && renderCountdown()}
+      {phase === "calibrating" && renderCalibrating()}
+      {phase === "done" && renderDone()}
     </SafeAreaView>
   );
 }
@@ -414,54 +425,54 @@ export default function CalibrationScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#0f0f1a',
+    backgroundColor: "#0f0f1a",
   },
   backButton: {
     padding: 12,
     paddingLeft: 16,
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
   },
 
   // Idle
   idleContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 28,
     gap: 16,
   },
   idleTitle: {
     fontSize: 26,
-    fontWeight: '800',
-    color: '#ffffff',
-    textAlign: 'center',
+    fontWeight: "800",
+    color: "#ffffff",
+    textAlign: "center",
   },
   idleBody: {
     fontSize: 15,
-    color: '#a0a0b0',
-    textAlign: 'center',
+    color: "#a0a0b0",
+    textAlign: "center",
     lineHeight: 24,
   },
   input: {
-    width: '100%',
-    backgroundColor: '#1e1e2e',
+    width: "100%",
+    backgroundColor: "#1e1e2e",
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#2a2a3e',
+    borderColor: "#2a2a3e",
   },
   warningBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
-    backgroundColor: '#2a1e0e',
+    backgroundColor: "#2a1e0e",
     borderRadius: 10,
     padding: 12,
-    width: '100%',
+    width: "100%",
   },
   warningText: {
-    color: '#f39c12',
+    color: "#f39c12",
     fontSize: 13,
     flex: 1,
   },
@@ -469,125 +480,125 @@ const styles = StyleSheet.create({
   // Countdown
   centeredOverlay: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     gap: 16,
   },
   countdownLabel: {
     fontSize: 20,
-    color: '#a0a0b0',
-    fontWeight: '500',
+    color: "#a0a0b0",
+    fontWeight: "500",
   },
   countdownNumber: {
     fontSize: 120,
-    fontWeight: '900',
-    color: '#6c5ce7',
+    fontWeight: "900",
+    color: "#6c5ce7",
     lineHeight: 130,
   },
   countdownSign: {
     fontSize: 22,
-    color: '#ffffff',
-    fontWeight: '600',
+    color: "#ffffff",
+    fontWeight: "600",
   },
 
   // Done
   doneContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 28,
     gap: 16,
   },
   doneTitle: {
     fontSize: 26,
-    fontWeight: '800',
-    color: '#ffffff',
+    fontWeight: "800",
+    color: "#ffffff",
   },
   doneAccuracy: {
     fontSize: 40,
-    fontWeight: '900',
-    color: '#2ecc71',
+    fontWeight: "900",
+    color: "#2ecc71",
   },
   doneBody: {
     fontSize: 15,
-    color: '#a0a0b0',
-    textAlign: 'center',
+    color: "#a0a0b0",
+    textAlign: "center",
     lineHeight: 24,
   },
   statsBox: {
-    width: '100%',
-    backgroundColor: '#1e1e2e',
+    width: "100%",
+    backgroundColor: "#1e1e2e",
     borderRadius: 12,
     padding: 16,
     gap: 8,
   },
   statsTitle: {
-    color: '#a0a0b0',
+    color: "#a0a0b0",
     fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
+    fontWeight: "600",
+    textTransform: "uppercase",
     letterSpacing: 0.8,
     marginBottom: 4,
   },
   statRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   statLetter: {
-    color: '#ffffff',
-    fontWeight: '700',
+    color: "#ffffff",
+    fontWeight: "700",
     width: 20,
     fontSize: 13,
   },
   statTrack: {
     flex: 1,
     height: 6,
-    backgroundColor: '#2a2a3e',
+    backgroundColor: "#2a2a3e",
     borderRadius: 3,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   statFill: {
-    height: '100%',
+    height: "100%",
     borderRadius: 3,
   },
   statPct: {
-    color: '#a0a0b0',
+    color: "#a0a0b0",
     fontSize: 11,
     width: 34,
-    textAlign: 'right',
+    textAlign: "right",
   },
 
   // Buttons
   primaryButton: {
-    width: '100%',
+    width: "100%",
     paddingVertical: 18,
-    backgroundColor: '#6c5ce7',
+    backgroundColor: "#6c5ce7",
     borderRadius: 16,
-    alignItems: 'center',
-    shadowColor: '#6c5ce7',
+    alignItems: "center",
+    shadowColor: "#6c5ce7",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.5,
     shadowRadius: 8,
     elevation: 6,
   },
   primaryButtonText: {
-    color: '#ffffff',
+    color: "#ffffff",
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: "700",
   },
   buttonDisabled: {
     opacity: 0.4,
   },
   secondaryButton: {
-    width: '100%',
+    width: "100%",
     paddingVertical: 14,
-    alignItems: 'center',
+    alignItems: "center",
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#2a2a3e',
+    borderColor: "#2a2a3e",
   },
   secondaryButtonText: {
-    color: '#a0a0b0',
+    color: "#a0a0b0",
     fontSize: 15,
-    fontWeight: '500',
+    fontWeight: "500",
   },
 });

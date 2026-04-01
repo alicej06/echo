@@ -15,7 +15,7 @@
  *   - Overlap       : 50 %    →  advance by 20 samples per emission
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from "events";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -131,7 +131,7 @@ export class EMGStreamProcessor extends EventEmitter {
       ) {
         const window = this.buildWindow();
         if (window !== null) {
-          this.emit('window', window);
+          this.emit("window", window);
         }
       }
     }
@@ -171,7 +171,7 @@ export class EMGStreamProcessor extends EventEmitter {
     // The newest sample is at writeHead - 1 (mod RING_CAPACITY).
     // We want samples [writeHead - WINDOW_SAMPLES .. writeHead - 1].
     const startSample =
-      ((this.writeHead - WINDOW_SAMPLES) % RING_CAPACITY + RING_CAPACITY) %
+      (((this.writeHead - WINDOW_SAMPLES) % RING_CAPACITY) + RING_CAPACITY) %
       RING_CAPACITY;
 
     for (let i = 0; i < WINDOW_SAMPLES; i++) {
@@ -191,21 +191,24 @@ export class EMGStreamProcessor extends EventEmitter {
   // Typed emit/on overloads (TypeScript ergonomics)
   // -------------------------------------------------------------------------
 
-  emit(event: 'window', data: Float32Array): boolean;
-  emit(event: 'error', err: Error): boolean;
-  emit(event: string, ...args: unknown[]): boolean {
+  emit(event: "window", data: Float32Array): boolean;
+  emit(event: "error", err: Error): boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  emit(event: string, ...args: any[]): boolean {
     return super.emit(event, ...args);
   }
 
-  on(event: 'window', listener: (data: Float32Array) => void): this;
-  on(event: 'error', listener: (err: Error) => void): this;
-  on(event: string, listener: (...args: unknown[]) => void): this {
+  on(event: "window", listener: (data: Float32Array) => void): this;
+  on(event: "error", listener: (err: Error) => void): this;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
 
-  off(event: 'window', listener: (data: Float32Array) => void): this;
-  off(event: 'error', listener: (err: Error) => void): this;
-  off(event: string, listener: (...args: unknown[]) => void): this {
+  off(event: "window", listener: (data: Float32Array) => void): this;
+  off(event: "error", listener: (err: Error) => void): this;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }
 }

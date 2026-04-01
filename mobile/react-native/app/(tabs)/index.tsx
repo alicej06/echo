@@ -64,7 +64,8 @@ export default function ASLLiveScreen() {
   const [latency, setLatency] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wsRef = useRef<any>(null);
   const streamInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const myoRef = useRef<MyoBLEManager | null>(null);
   const bufferRef = useRef<EMGWindowBuffer | null>(null);

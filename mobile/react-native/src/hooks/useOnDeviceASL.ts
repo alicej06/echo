@@ -11,12 +11,16 @@
  *     useOnDeviceASL({ autoConnect: false, fallbackToServer: true });
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Device } from 'react-native-ble-plx';
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Device } from "react-native-ble-plx";
 
-import { bleManager, ConnectionStatus, BLE_DEVICE_NAME } from '../bluetooth/BLEManager';
-import { EMGWindowBuffer } from '../inference/EMGWindowBuffer';
-import { onDeviceInference } from '../inference/ONNXInference';
+import {
+  bleManager,
+  ConnectionStatus,
+  BLE_DEVICE_NAME,
+} from "../bluetooth/BLEManager";
+import { EMGWindowBuffer } from "../inference/EMGWindowBuffer";
+import { onDeviceInference } from "../inference/ONNXInference";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -75,13 +79,15 @@ export interface UseOnDeviceASLResult {
 
 const MAX_HISTORY = 50;
 const DEFAULT_DEVICE_NAME = BLE_DEVICE_NAME; // 'Myo'
-const DEFAULT_SERVER_URL = 'ws://localhost:8000/stream';
+const DEFAULT_SERVER_URL = "ws://localhost:8000/stream";
 
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
-export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDeviceASLResult {
+export function useOnDeviceASL(
+  options: UseOnDeviceASLOptions = {},
+): UseOnDeviceASLResult {
   const {
     deviceName = DEFAULT_DEVICE_NAME,
     onPrediction,
@@ -95,10 +101,13 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
   // State
   // -------------------------------------------------------------------------
 
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>("disconnected");
   const [lastLabel, setLastLabel] = useState<string | null>(null);
   const [lastConfidence, setLastConfidence] = useState(0);
-  const [predictionHistory, setPredictionHistory] = useState<PredictionEntry[]>([]);
+  const [predictionHistory, setPredictionHistory] = useState<PredictionEntry[]>(
+    [],
+  );
   const [modelLoaded, setModelLoaded] = useState(false);
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
   const [windowsProcessed, setWindowsProcessed] = useState(0);
@@ -110,8 +119,12 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
 
   const mountedRef = useRef(true);
   const deviceRef = useRef<Device | null>(null);
-  const windowBufferRef = useRef<EMGWindowBuffer>(new EMGWindowBuffer());
-  const wsRef = useRef<WebSocket | null>(null);
+  // Pending windows collected from EMGWindowBuffer onWindow callbacks
+  const pendingWindowsRef = useRef<Float32Array[]>([]);
+  // EMGWindowBuffer is initialized in useEffect once the ref infrastructure is set up
+  const windowBufferRef = useRef<EMGWindowBuffer | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wsRef = useRef<any>(null);
   const modelLoadErrorRef = useRef<string | null>(null);
 
   // Keep callback refs stable so inner callbacks always call the latest version.
@@ -120,6 +133,13 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
 
   const onConnectionChangeRef = useRef(onConnectionChange);
   onConnectionChangeRef.current = onConnectionChange;
+
+  // Initialize EMGWindowBuffer with onWindow callback on first render
+  if (windowBufferRef.current === null) {
+    windowBufferRef.current = new EMGWindowBuffer((window) => {
+      pendingWindowsRef.current.push(window);
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Internal helpers
@@ -146,13 +166,14 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
 
     console.log(`[useOnDeviceASL] Opening fallback WebSocket: ${serverUrl}`);
     const ws = new WebSocket(serverUrl);
-    ws.binaryType = 'arraybuffer';
+    ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
-      console.log('[useOnDeviceASL] Fallback WebSocket connected.');
+      console.log("[useOnDeviceASL] Fallback WebSocket connected.");
     };
 
-    ws.onmessage = (event: MessageEvent) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ws.onmessage = (event: any) => {
       if (!mountedRef.current) return;
       try {
         const parsed = JSON.parse(event.data as string) as {
@@ -161,14 +182,18 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
         };
 
         if (
-          typeof parsed.label === 'string' &&
-          typeof parsed.confidence === 'number'
+          typeof parsed.label === "string" &&
+          typeof parsed.confidence === "number"
         ) {
           const { label, confidence } = parsed;
           setLastLabel(label);
           setLastConfidence(confidence);
           setPredictionHistory((prev) => {
-            const entry: PredictionEntry = { label, confidence, timestamp: Date.now() };
+            const entry: PredictionEntry = {
+              label,
+              confidence,
+              timestamp: Date.now(),
+            };
             return [entry, ...prev].slice(0, MAX_HISTORY);
           });
           setPredictionsAccepted((n) => n + 1);
@@ -180,11 +205,11 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
     };
 
     ws.onerror = (err) => {
-      console.warn('[useOnDeviceASL] Fallback WebSocket error:', err);
+      console.warn("[useOnDeviceASL] Fallback WebSocket error:", err);
     };
 
     ws.onclose = () => {
-      console.log('[useOnDeviceASL] Fallback WebSocket closed.');
+      console.log("[useOnDeviceASL] Fallback WebSocket closed.");
     };
 
     wsRef.current = ws;
@@ -203,47 +228,62 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
    * complete window either runs on-device ONNX inference or forwards to the
    * fallback WebSocket server.
    */
-  const handleBytes = useCallback(async (bytes: Uint8Array) => {
-    const windows = windowBufferRef.current.ingestBytes(bytes);
+  const handleBytes = useCallback(
+    async (bytes: Uint8Array) => {
+      // Feed bytes into the window buffer; onWindow callback populates pendingWindowsRef
+      windowBufferRef.current?.feedMyo(bytes);
 
-    if (windows.length === 0) return;
+      const windows = pendingWindowsRef.current.splice(0);
 
-    setWindowsProcessed((n) => n + windows.length);
+      if (windows.length === 0) return;
 
-    for (const window of windows) {
-      // On-device path
-      if (modelLoadErrorRef.current === null) {
-        let result: { label: string; confidence: number } | null = null;
-        try {
-          result = await onDeviceInference.predict(window);
-        } catch (err) {
-          console.warn('[useOnDeviceASL] ONNX predict error:', err);
+      setWindowsProcessed((n) => n + windows.length);
+
+      for (const window of windows) {
+        // On-device path
+        if (modelLoadErrorRef.current === null) {
+          let result: { label: string; confidence: number } | null = null;
+          try {
+            // EMGWindowBuffer yields Float32Array; predict() expects Int16Array.
+            // Scale back to int16 range for the inference contract.
+            const int16Window = Int16Array.from(window, (v) =>
+              Math.round(v * 2048),
+            );
+            result = await onDeviceInference.predict(int16Window);
+          } catch (err) {
+            console.warn("[useOnDeviceASL] ONNX predict error:", err);
+          }
+
+          if (result !== null && mountedRef.current) {
+            const { label, confidence } = result;
+            setLastLabel(label);
+            setLastConfidence(confidence);
+            setPredictionHistory((prev) => {
+              const entry: PredictionEntry = {
+                label,
+                confidence,
+                timestamp: Date.now(),
+              };
+              return [entry, ...prev].slice(0, MAX_HISTORY);
+            });
+            setPredictionsAccepted((n) => n + 1);
+            onPredictionRef.current?.(label, confidence);
+          }
+          continue;
         }
 
-        if (result !== null && mountedRef.current) {
-          const { label, confidence } = result;
-          setLastLabel(label);
-          setLastConfidence(confidence);
-          setPredictionHistory((prev) => {
-            const entry: PredictionEntry = { label, confidence, timestamp: Date.now() };
-            return [entry, ...prev].slice(0, MAX_HISTORY);
-          });
-          setPredictionsAccepted((n) => n + 1);
-          onPredictionRef.current?.(label, confidence);
+        // Fallback WebSocket path
+        if (
+          fallbackToServer &&
+          wsRef.current !== null &&
+          wsRef.current.readyState === WebSocket.OPEN
+        ) {
+          wsRef.current.send(window.buffer);
         }
-        continue;
       }
-
-      // Fallback WebSocket path
-      if (
-        fallbackToServer &&
-        wsRef.current !== null &&
-        wsRef.current.readyState === WebSocket.OPEN
-      ) {
-        wsRef.current.send(window.buffer);
-      }
-    }
-  }, [fallbackToServer]);
+    },
+    [fallbackToServer],
+  );
 
   // -------------------------------------------------------------------------
   // Load ONNX model on mount
@@ -259,13 +299,13 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
         modelLoadErrorRef.current = null;
         setModelLoaded(true);
         setModelLoadError(null);
-        console.log('[useOnDeviceASL] ONNX model ready.');
+        console.log("[useOnDeviceASL] ONNX model ready.");
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         modelLoadErrorRef.current = msg;
         setModelLoadError(msg);
-        console.warn('[useOnDeviceASL] Model load failed:', msg);
+        console.warn("[useOnDeviceASL] Model load failed:", msg);
 
         if (fallbackToServer) {
           openFallbackSocket();
@@ -276,8 +316,8 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
     return () => {
       cancelled = true;
     };
-  // openFallbackSocket and fallbackToServer are stable across renders
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // openFallbackSocket and fallbackToServer are stable across renders
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------------------------------------------------------------------------
@@ -297,14 +337,16 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
 
   // connect and disconnect are defined below; use a ref to call the latest
   // version inside the mount-only effect.
-  const connectRef = useRef<() => Promise<void>>(async () => { /* placeholder */ });
+  const connectRef = useRef<() => Promise<void>>(async () => {
+    /* placeholder */
+  });
 
   useEffect(() => {
     if (autoConnect) {
       connectRef.current();
     }
-  // Run only on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Run only on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------------------------------------------------------------------------
@@ -315,12 +357,14 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      bleManager.disconnect().catch(() => { /* best-effort */ });
-      windowBufferRef.current.reset();
+      bleManager.disconnect().catch(() => {
+        /* best-effort */
+      });
+      windowBufferRef.current?.reset();
       closeFallbackSocket();
       onDeviceInference.dispose();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------------------------------------------------------------------------
@@ -329,7 +373,11 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
 
   const connect = useCallback(async () => {
     const status = bleManager.getStatus();
-    if (status === 'connected' || status === 'connecting' || status === 'scanning') {
+    if (
+      status === "connected" ||
+      status === "connecting" ||
+      status === "scanning"
+    ) {
       return;
     }
 
@@ -338,7 +386,7 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
       deviceRef.current = device;
       bleManager.subscribeToEMG(device, handleBytes);
     } catch (err) {
-      console.error('[useOnDeviceASL] connect() error:', err);
+      console.error("[useOnDeviceASL] connect() error:", err);
       // BLEManager already set status to 'error'.
     }
   }, [deviceName, handleBytes]);
@@ -352,7 +400,7 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
 
   const disconnect = useCallback(async () => {
     await bleManager.disconnect();
-    windowBufferRef.current.reset();
+    windowBufferRef.current?.reset();
     deviceRef.current = null;
   }, []);
 
@@ -368,7 +416,7 @@ export function useOnDeviceASL(options: UseOnDeviceASLOptions = {}): UseOnDevice
   // Derived state
   // -------------------------------------------------------------------------
 
-  const isConnected = connectionStatus === 'connected';
+  const isConnected = connectionStatus === "connected";
 
   // -------------------------------------------------------------------------
   // Return
