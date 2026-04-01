@@ -233,22 +233,31 @@ export default function ASLLiveScreen() {
 
       {/* Big prediction */}
       <View style={styles.predictionContainer}>
-        <Animated.Text
-          style={[styles.predLetter, { transform: [{ scale: pulseAnim }] }]}
-        >
-          {prediction?.class ?? "?"}
-        </Animated.Text>
-        <View style={styles.confRow}>
-          <View
-            style={[
-              styles.confBar,
-              { width: `${conf * 100}%`, backgroundColor: confColor },
-            ]}
-          />
-        </View>
-        <Text style={[styles.confText, { color: confColor }]}>
-          {(conf * 100).toFixed(1)}% confidence
-        </Text>
+        {wsConnected && prediction === null ? (
+          <>
+            <ActivityIndicator size="large" color="#6c5ce7" />
+            <Text style={styles.waitingText}>Waiting for signal...</Text>
+          </>
+        ) : (
+          <>
+            <Animated.Text
+              style={[styles.predLetter, { transform: [{ scale: pulseAnim }] }]}
+            >
+              {prediction?.class ?? "?"}
+            </Animated.Text>
+            <View style={styles.confRow}>
+              <View
+                style={[
+                  styles.confBar,
+                  { width: `${conf * 100}%`, backgroundColor: confColor },
+                ]}
+              />
+            </View>
+            <Text style={[styles.confText, { color: confColor }]}>
+              {(conf * 100).toFixed(1)}% confidence
+            </Text>
+          </>
+        )}
       </View>
 
       {/* Myo connect button */}
@@ -291,7 +300,7 @@ export default function ASLLiveScreen() {
       {/* History */}
       <View style={styles.historyHeader}>
         <Text style={styles.historyTitle}>Recognition history</Text>
-        <Pressable onPress={clearHistory}>
+        <Pressable onPress={clearHistory} style={styles.clearBtnHitArea}>
           <Text style={styles.clearBtn}>Clear</Text>
         </Pressable>
       </View>
@@ -300,8 +309,8 @@ export default function ASLLiveScreen() {
         horizontal
         showsHorizontalScrollIndicator={false}
       >
-        {history.map((letter, i) => (
-          <View key={i} style={[styles.historyChip, { opacity: 1 - i * 0.04 }]}>
+        {history.slice(0, 8).map((letter, i) => (
+          <View key={i} style={[styles.historyChip, { opacity: 1 - i * 0.1 }]}>
             <Text style={styles.historyLetter}>{letter}</Text>
           </View>
         ))}
@@ -315,10 +324,6 @@ export default function ASLLiveScreen() {
           </Text>
         )}
       </ScrollView>
-
-      <Text style={styles.footnote}>
-        {useMyo ? "Live Myo EMG" : "Mock EMG"} → Railway server → prediction
-      </Text>
     </View>
   );
 }
@@ -384,7 +389,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   historyTitle: { color: "#aaa", fontSize: 13, fontWeight: "600" },
+  clearBtnHitArea: { padding: 8 },
   clearBtn: { color: "#4CAF50", fontSize: 13 },
+  waitingText: { color: "#666", fontSize: 13, marginTop: 12 },
   historyScroll: { maxHeight: 56, marginBottom: 8 },
   historyChip: {
     width: 40,

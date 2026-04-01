@@ -2,7 +2,8 @@
   "expo": {
     "name": "MAIA ASL",
     "slug": "maia-emg-asl",
-    "version": "0.1.0",
+    "version": "1.0.0",
+    "description": "Real-time ASL recognition from muscle signals via EMG wristband. No camera required.",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -12,6 +13,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.maiatech.emgasl",
+      "buildNumber": "1",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "MAIA needs Bluetooth to connect to the neural band",
         "NSBluetoothPeripheralUsageDescription": "MAIA needs Bluetooth to connect to the neural band",
