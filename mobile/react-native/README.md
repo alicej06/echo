@@ -12,7 +12,7 @@ React Native / Expo companion app for the EMG-ASL Layer wristband. Connects to t
 | npm | 10+ | Bundled with Node 20 |
 | Expo CLI | Latest | `npm install -g expo-cli` (or use `npx expo`) |
 | Expo Go app | Latest | iOS App Store / Google Play Store |
-| Physical iOS or Android device | — | **Required** — BLE does not work in simulators |
+| Physical iOS or Android device | — | **Required.** BLE does not work in simulators. |
 
 **macOS only** (for native iOS builds via EAS):
 - Xcode 15+
@@ -22,14 +22,14 @@ React Native / Expo companion app for the EMG-ASL Layer wristband. Connects to t
 
 ## Setup
 
-**Step 1 — Install Node dependencies**
+**Step 1: Install Node dependencies**
 
 ```bash
 cd mobile/react-native
 npm install
 ```
 
-**Step 2 — Configure server URL**
+**Step 2: Configure server URL**
 
 The app needs to know where your inference server is running. Copy the example env file and edit it:
 
@@ -37,7 +37,7 @@ The app needs to know where your inference server is running. Copy the example e
 cp .env.example .env
 ```
 
-Open `.env` and set the IP address of the machine running the Python inference server. Use the machine's **LAN IP** (not `localhost` — your phone cannot reach `localhost` on your laptop):
+Open `.env` and set the IP address of the machine running the Python inference server. Use the machine's **LAN IP** (not `localhost`, since your phone cannot reach `localhost` on your laptop):
 
 ```env
 EXPO_PUBLIC_SERVER_URL=ws://192.168.1.42:8765
@@ -52,7 +52,7 @@ To find your laptop's LAN IP:
 
 Your phone and laptop **must be on the same WiFi network**.
 
-**Step 3 — Start the Expo dev server**
+**Step 3: Start the Expo dev server**
 
 ```bash
 npx expo start
@@ -60,7 +60,7 @@ npx expo start
 
 Scan the QR code with the **Expo Go** app on your phone. The app will load and bundle on your device.
 
-> **BLE Note**: BLE functionality is unavailable in iOS Simulator and Android Emulator. You must test on a physical device. Also, iOS requires Bluetooth permission to be granted the first time the app launches — tap "Allow" when prompted.
+> **BLE Note**: BLE functionality is unavailable in iOS Simulator and Android Emulator. You must test on a physical device. Also, iOS requires Bluetooth permission to be granted the first time the app launches. Tap "Allow" when prompted.
 
 ---
 
@@ -167,14 +167,14 @@ Configure server connection, BLE pairing, TTS behavior, and inference parameters
 
 The app uses [Expo Application Services (EAS)](https://expo.dev/eas) for production builds.
 
-**Step 1 — Install EAS CLI**
+**Step 1: Install EAS CLI**
 
 ```bash
 npm install -g eas-cli
 eas login
 ```
 
-**Step 2 — Configure EAS (one-time)**
+**Step 2: Configure EAS (one-time)**
 
 ```bash
 eas build:configure
@@ -182,13 +182,13 @@ eas build:configure
 
 This creates `eas.json` in the project root.
 
-**Step 3 — Build for iOS**
+**Step 3: Build for iOS**
 
 ```bash
 eas build --platform ios --profile production
 ```
 
-**Step 4 — Build for Android**
+**Step 4: Build for Android**
 
 ```bash
 eas build --platform android --profile production

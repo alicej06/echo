@@ -1,4 +1,4 @@
-# Hardware — EMG-ASL Layer
+# Hardware: EMG-ASL Layer
 
 This directory contains hardware documentation for the EMG wristband used by
 the EMG-ASL Layer.
@@ -7,11 +7,11 @@ the EMG-ASL Layer.
 
 ## Supported Devices
 
-| Device | Status | Directory | Notes |
-|--------|--------|-----------|-------|
-| **Thalmic MYO Armband** | **Primary / Supported** | `myo_armband/` | 8-ch sEMG, 200 Hz, int8. USB dongle + MyoConnect for laptop; direct BLE for mobile. |
-| OpenBCI Cyton (8-ch) | Supported (via LSL bridge) | `openbci/` | Higher ADC resolution; less portable |
-| OpenBCI Ganglion (4-ch) | Partial support | `openbci/` | 4-channel mode; reduced accuracy |
+| Device                  | Status                     | Directory      | Notes                                                                               |
+| ----------------------- | -------------------------- | -------------- | ----------------------------------------------------------------------------------- |
+| **Thalmic MYO Armband** | **Primary / Supported**    | `myo_armband/` | 8-ch sEMG, 200 Hz, int8. USB dongle + MyoConnect for laptop; direct BLE for mobile. |
+| OpenBCI Cyton (8-ch)    | Supported (via LSL bridge) | `openbci/`     | Higher ADC resolution; less portable                                                |
+| OpenBCI Ganglion (4-ch) | Partial support            | `openbci/`     | 4-channel mode; reduced accuracy                                                    |
 
 ---
 
@@ -29,24 +29,26 @@ the EMG-ASL Layer.
 ## MYO BLE UUIDs
 
 These UUIDs are used by the mobile app and are defined in:
+
 - `src/utils/constants.py` (Python server)
 - `mobile/react-native/src/bluetooth/BLEManager.ts` (React Native app)
 
-| Resource | UUID |
-|----------|------|
-| Control Service | `d5060001-a904-deb9-4748-2c7f4a124842` |
-| Command Characteristic | `d5060401-a904-deb9-4748-2c7f4a124842` |
-| EMG Service | `d5060005-a904-deb9-4748-2c7f4a124842` |
-| EMG Char 0 (ch 0–3, samples 0–1) | `d5060105-a904-deb9-4748-2c7f4a124842` |
-| EMG Char 1 (ch 4–7, samples 0–1) | `d5060205-a904-deb9-4748-2c7f4a124842` |
-| EMG Char 2 (ch 0–3, samples 2–3) | `d5060305-a904-deb9-4748-2c7f4a124842` |
-| EMG Char 3 (ch 4–7, samples 2–3) | `d5060405-a904-deb9-4748-2c7f4a124842` |
+| Resource                         | UUID                                   |
+| -------------------------------- | -------------------------------------- |
+| Control Service                  | `d5060001-a904-deb9-4748-2c7f4a124842` |
+| Command Characteristic           | `d5060401-a904-deb9-4748-2c7f4a124842` |
+| EMG Service                      | `d5060005-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 0 (ch 0-3, samples 0-1) | `d5060105-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 1 (ch 4-7, samples 0-1) | `d5060205-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 2 (ch 0-3, samples 2-3) | `d5060305-a904-deb9-4748-2c7f4a124842` |
+| EMG Char 3 (ch 4-7, samples 2-3) | `d5060405-a904-deb9-4748-2c7f4a124842` |
 
 ---
 
 ## MYO EMG Data Format
 
 Each of the 4 EMG notify characteristics delivers:
+
 - **2 samples** × **4 channels** (int8, signed) per notification
 - ~50 Hz per characteristic → **8 channels at 200 Hz** combined
 
@@ -81,11 +83,13 @@ Without this command, the EMG characteristics will not emit notifications.
 ## Connection Paths
 
 **Laptop / data collection path** (primary for recording):
+
 ```
 MYO Armband → MYO USB Dongle → MyoConnect → myo-python → record_session.py
 ```
 
 **Mobile app path** (primary for live inference):
+
 ```
 MYO Armband → Direct BLE → React Native BLEManager → EMGStreamProcessor → ONNX
 ```
@@ -102,6 +106,7 @@ hardware/
 ```
 
 Legacy (archived):
+
 ```
 hardware/
 └── myoware_ble/                  (Archived) nRF52840 + MyoWare 2.0 custom firmware

@@ -1,4 +1,4 @@
-# Thalmic MYO Armband — Hardware Reference
+# Thalmic MYO Armband: Hardware Reference
 
 The MYO Armband is the primary EMG hardware for the MAIA EMG-ASL Layer.
 It provides 8-channel sEMG at 200 Hz without any custom wiring, firmware,
@@ -16,15 +16,15 @@ or electrode preparation.
 | Amplitude range | ±1.25 mV (after int8 → mV conversion) |
 | Connectivity | Bluetooth Low Energy 4.0 |
 | Power | Rechargeable internal battery (micro-USB) |
-| Battery life | ~6–8 hours of continuous streaming |
+| Battery life | ~6-8 hours of continuous streaming |
 | Weight | ~93 g |
-| Dimensions | Adjustable band, fits forearm circumference 175–270 mm |
+| Dimensions | Adjustable band, fits forearm circumference 175-270 mm |
 
 ---
 
 ## Connection Paths
 
-### Path A — Laptop (Data Collection)
+### Path A: Laptop (Data Collection)
 
 ```
 MYO Armband
@@ -46,11 +46,11 @@ data/raw/  →  training pipeline
 ```
 
 **Required software:**
-- MyoConnect (Thalmic Labs — archive download)
+- MyoConnect (Thalmic Labs, available via archive download)
 - `pip install myo-python>=0.2.1 cffi>=1.16`
 - `export MYO_SDK_PATH="/Applications/Myo Connect.app/Contents/Frameworks"` (macOS)
 
-### Path B — iPhone (Live Inference)
+### Path B: iPhone (Live Inference)
 
 ```
 MYO Armband
@@ -136,12 +136,12 @@ mv = value / 127.0 * 1250.0   # result in µV (±1250 µV = ±1.25 mV)
 
 ### Position
 
-Place the armband on the **dominant forearm**, **2–3 cm below the elbow
+Place the armband on the **dominant forearm**, **2-3 cm below the elbow
 crease**, tightened until snug. The MYO logo (electrode 1 / Ch0) should
 face the **palmar (inner wrist) side**.
 
 ```
- RIGHT FOREARM — cross-section view (elbow toward viewer)
+ RIGHT FOREARM: cross-section view (elbow toward viewer)
 
                   DORSAL (top)
                     [ Ch6 ]
@@ -168,7 +168,7 @@ RADIAL                                    ULNAR
 ### Skin Prep (Long Sessions)
 
 1. Wipe with 70% isopropyl alcohol wipe
-2. Lightly abrade with gauze (2–3 passes)
+2. Lightly abrade with gauze (2-3 passes)
 3. Let dry completely before fitting armband
 4. Avoid applying lotion or sunscreen before the session
 
