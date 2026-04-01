@@ -61,7 +61,7 @@ TECHNICAL
 • Railway WebSocket server for enhanced accuracy
 
 PRIVACY
-MAIA ASL does not collect, transmit, or store any personal data. EMG signals are processed locally on your device. No account required. See our full privacy policy at https://calebsnewton.github.io/maia-emg-asl/privacy
+MAIA ASL does not collect, transmit, or store any personal data. EMG signals are processed locally on your device. No account required. See our full privacy policy at https://docs-sage-seven.vercel.app/privacy
 ```
 
 ---
@@ -83,7 +83,7 @@ https://github.com/calebnewtonusc/maia-emg-asl
 ## Privacy Policy URL
 
 ```
-https://calebsnewton.github.io/maia-emg-asl/privacy
+https://docs-sage-seven.vercel.app/privacy
 ```
 
 (Enable GitHub Pages on the repo — source: /docs folder — to activate this URL)
