@@ -18,9 +18,11 @@ letters are sent to an LLM which reconstructs them into natural English.
 
 No camera. No dongle. No MyoConnect. Pure BLE on modern macOS.
 
-**LLM backends (automatic fallback):**
-- **Claude Haiku** — best quality, set `ANTHROPIC_API_KEY` to use
-- **Ollama (local, free)** — auto-fallback when no API key; runs `llama3.2` on your machine
+**LLM backends (automatic priority order):**
+
+- **Claude Haiku** — best quality, set `ANTHROPIC_API_KEY`
+- **Ollama cloud** — free hosted models, set `OLLAMA_API_KEY` (get one at ollama.com)
+- **Ollama local** — runs `llama3.2` on your machine, no key needed
 - **`--no-llm`** — letters only, no sentence reconstruction
 
 ---
@@ -42,25 +44,34 @@ pip install -r requirements-live.txt
 ### 2. Set up your LLM backend
 
 **Option A: Claude Haiku (best quality)**
+
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
-**Option B: Ollama (free, runs locally, no API key needed)**
+**Option B: Ollama cloud (free hosted models)**
+
+```bash
+export OLLAMA_API_KEY="your-key-here"  # get one at ollama.com
+# No install needed — runs in the cloud on gemma3:4b by default
+```
+
+**Option C: Ollama local (free, runs on your machine)**
+
 ```bash
 # Install Ollama: https://ollama.com
 ollama pull llama3.2
-# No env var needed — script detects missing key and falls back automatically
+# No env var needed — auto-detects local Ollama at localhost:11434
 ```
 
-**Option C: Letters only (no LLM)**
+**Option D: Letters only (no LLM)**
+
 ```bash
 python scripts/live_translate.py --no-llm
 ```
 
-The script tries Claude first. If `ANTHROPIC_API_KEY` is not set or errors,
-it automatically falls back to Ollama at `http://localhost:11434`. No manual
-toggle required — it just works.
+The script tries each backend in order and falls through automatically.
+No manual toggle needed.
 
 ### 3. Pair your Myo
 
@@ -126,10 +137,10 @@ python scripts/calibrate_quick.py --user me --reps 5
 
 Typical accuracy improvement:
 
-| Model              | Accuracy (typical) |
-| ------------------ | ------------------ |
-| Base model         | ~55-65%            |
-| After calibration  | ~80-90%            |
+| Model             | Accuracy (typical) |
+| ----------------- | ------------------ |
+| Base model        | ~55-65%            |
+| After calibration | ~80-90%            |
 
 ---
 
@@ -137,20 +148,20 @@ Typical accuracy improvement:
 
 ### `live_translate.py`
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--device NAME` | `"Myo"` | BLE name of your Myo armband |
-| `--scan` | — | List nearby BLE devices and exit |
-| `--model PATH` | `models/asl_emg_classifier.pt` | Path to `.pt` model weights (see note below) |
-| `--no-llm` | — | Skip LLM entirely, show raw letters only |
+| Flag            | Default                        | Description                                  |
+| --------------- | ------------------------------ | -------------------------------------------- |
+| `--device NAME` | `"Myo"`                        | BLE name of your Myo armband                 |
+| `--scan`        | —                              | List nearby BLE devices and exit             |
+| `--model PATH`  | `models/asl_emg_classifier.pt` | Path to `.pt` model weights (see note below) |
+| `--no-llm`      | —                              | Skip LLM entirely, show raw letters only     |
 
 ### `calibrate_quick.py`
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--user ID` | `me` | User ID for saving the model |
-| `--letters ABC...` | `A-Z` | Letters to calibrate |
-| `--reps N` | `3` | Repetitions per letter |
+| Flag               | Default | Description                  |
+| ------------------ | ------- | ---------------------------- |
+| `--user ID`        | `me`    | User ID for saving the model |
+| `--letters ABC...` | `A-Z`   | Letters to calibrate         |
+| `--reps N`         | `3`     | Repetitions per letter       |
 
 ---
 
@@ -179,6 +190,7 @@ emg-asl/
 > `.pt` base model will be added once training runs complete.
 
 **Signal pipeline:**
+
 1. BLE GATT notifications deliver 16 bytes (2 samples x 8 channels) at ~200Hz
 2. Samples buffer into a rolling 4-second deque
 3. Every 100ms (20 samples), a 200ms window (40 samples) is extracted
@@ -201,24 +213,29 @@ Normal on some firmware versions. The script continues; EMG should still stream.
 
 **Letters wrong or random**
 First run with the base model will have moderate accuracy. Run calibration:
+
 ```bash
 python scripts/calibrate_quick.py --user me
 ```
 
 **"No module named 'bleak'"** or any other import error
+
 ```bash
 pip install -r requirements-live.txt
 ```
 
 **Ollama not responding / "connection refused"**
 Ollama needs to be running as a background service:
+
 ```bash
 ollama serve          # starts the server
 ollama pull llama3.2  # download the model (one-time, ~2GB)
 ```
+
 Or override the model: `export OLLAMA_MODEL=llama3.1:8b`
 
 **Want to force Ollama even if you have an API key**
+
 ```bash
 unset ANTHROPIC_API_KEY
 python scripts/live_translate.py --device "My Myo"

@@ -17,14 +17,11 @@ Usage (from project root):
     # Use a personal calibrated model:
     python scripts/live_translate.py --model models/calibrated/me/model.pt
 
-Requirements:
-    pip install -r requirements-live.txt
-
-LLM backend (automatic fallback):
-    1. Claude Haiku  — set ANTHROPIC_API_KEY env var (best quality)
-    2. Ollama local  — install Ollama + run: ollama pull llama3.2
-       Falls back automatically when ANTHROPIC_API_KEY is unset or errors.
-    3. --no-llm      — letters only, no sentence reconstruction
+LLM backends (automatic priority order):
+    1. Claude Haiku  — set ANTHROPIC_API_KEY (best quality)
+    2. Ollama cloud  — set OLLAMA_API_KEY (free cloud, uses gemma3:4b)
+    3. Ollama local  — runs at localhost:11434 if installed
+    4. --no-llm      — letters only
 """
 
 from __future__ import annotations
@@ -32,10 +29,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import json
 import os
 import struct
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -57,13 +56,17 @@ from src.models.lstm_classifier import LSTMClassifier
 # Config
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_PATH = ROOT / "models" / "asl_emg_classifier.pt"
-BUFFER_MAXLEN      = SAMPLE_RATE * 4
-LLM_PAUSE_S        = 1.8
-LLM_MIN_LETTERS    = 2
-ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
-OLLAMA_BASE_URL    = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL       = os.environ.get("OLLAMA_MODEL", "llama3.2")
+DEFAULT_MODEL_PATH  = ROOT / "models" / "asl_emg_classifier.pt"
+BUFFER_MAXLEN       = SAMPLE_RATE * 4
+LLM_PAUSE_S         = 1.8
+LLM_MIN_LETTERS     = 2
+
+ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
+OLLAMA_API_KEY      = os.environ.get("OLLAMA_API_KEY", "74dac44848a745fc8dd672fa57e7fb47.QH8v_5DvIscL1voqyrV48SAw")
+OLLAMA_CLOUD_URL    = "https://api.ollama.com/api/chat"
+OLLAMA_CLOUD_MODEL  = os.environ.get("OLLAMA_CLOUD_MODEL", "gemma3:4b")
+OLLAMA_LOCAL_URL    = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_LOCAL_MODEL  = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
 _NYQ = SAMPLE_RATE / 2.0
 _SOS = butter(4, [20.0 / _NYQ, 95.0 / _NYQ], btype="band", output="sos")
@@ -85,7 +88,7 @@ def clr(text: str, code: str) -> str:
     return f"{code}{text}{R}"
 
 # ---------------------------------------------------------------------------
-# BLE scanner utility
+# BLE scanner
 # ---------------------------------------------------------------------------
 
 async def scan_devices() -> None:
@@ -138,7 +141,7 @@ def predict(model: LSTMClassifier, window: np.ndarray) -> tuple[str, float]:
     return ASL_CLASSES[idx], float(probs[idx])
 
 # ---------------------------------------------------------------------------
-# LLM translation — Claude Haiku with automatic Ollama fallback
+# LLM backends — priority: Anthropic > Ollama cloud > Ollama local
 # ---------------------------------------------------------------------------
 
 LLM_SYSTEM = (
@@ -150,8 +153,7 @@ LLM_SYSTEM = (
 )
 
 
-def _try_anthropic(letters_str: str) -> str | None:
-    """Attempt Claude Haiku. Returns text on success, None on any failure."""
+def _try_anthropic(text: str) -> str | None:
     if not ANTHROPIC_API_KEY:
         return None
     try:
@@ -161,41 +163,75 @@ def _try_anthropic(letters_str: str) -> str | None:
             model="claude-haiku-4-5-20251001",
             max_tokens=128,
             system=LLM_SYSTEM,
-            messages=[{"role": "user", "content": letters_str}],
+            messages=[{"role": "user", "content": text}],
         )
         return msg.content[0].text.strip()
     except Exception as exc:
-        print(f"\n  {clr('[anthropic error]', YELLOW)} {exc} — trying Ollama fallback")
+        print(f"\n  {clr('[anthropic]', YELLOW)} {exc} — trying Ollama cloud")
         return None
 
 
-def _try_ollama(letters_str: str) -> str | None:
-    """Attempt Ollama via OpenAI-compat endpoint. Returns text or None."""
+def _try_ollama_cloud(text: str) -> str | None:
+    if not OLLAMA_API_KEY:
+        return None
+    try:
+        payload = json.dumps({
+            "model": OLLAMA_CLOUD_MODEL,
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": LLM_SYSTEM},
+                {"role": "user",   "content": text},
+            ],
+        }).encode()
+        req = urllib.request.Request(
+            OLLAMA_CLOUD_URL,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {OLLAMA_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read())
+        return result["message"]["content"].strip()
+    except Exception as exc:
+        print(f"\n  {clr('[ollama cloud]', YELLOW)} {exc} — trying local Ollama")
+        return None
+
+
+def _try_ollama_local(text: str) -> str | None:
     try:
         from openai import OpenAI
-        client = OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL)
+        client = OpenAI(api_key="ollama", base_url=OLLAMA_LOCAL_URL)
         resp = client.chat.completions.create(
-            model=OLLAMA_MODEL,
+            model=OLLAMA_LOCAL_MODEL,
             max_tokens=128,
             messages=[
                 {"role": "system", "content": LLM_SYSTEM},
-                {"role": "user",   "content": letters_str},
+                {"role": "user",   "content": text},
             ],
         )
-        result = resp.choices[0].message.content.strip()
-        print(f"\n  {clr('[ollama]', DIM)} used {OLLAMA_MODEL} for reconstruction")
-        return result
+        return resp.choices[0].message.content.strip()
     except Exception as exc:
         return f"[LLM error: {exc}]"
 
 
 async def llm_translate(letters: list[str]) -> str:
-    letters_str = "".join(letters)
-    # Try Anthropic first, fall back to Ollama automatically
-    result = _try_anthropic(letters_str)
-    if result is not None:
-        return result
-    return _try_ollama(letters_str) or "[set ANTHROPIC_API_KEY or install Ollama to enable reconstruction]"
+    text = "".join(letters)
+    return (
+        _try_anthropic(text)
+        or _try_ollama_cloud(text)
+        or _try_ollama_local(text)
+        or "[no LLM available — set ANTHROPIC_API_KEY or OLLAMA_API_KEY]"
+    )
+
+
+def active_llm_label() -> str:
+    if ANTHROPIC_API_KEY:
+        return clr("Claude Haiku", CYAN)
+    if OLLAMA_API_KEY:
+        return clr(f"Ollama cloud ({OLLAMA_CLOUD_MODEL})", CYAN)
+    return clr(f"Ollama local ({OLLAMA_LOCAL_MODEL})", YELLOW)
 
 # ---------------------------------------------------------------------------
 # Display
@@ -302,15 +338,12 @@ class MyoSession:
                 except Exception:
                     pass
 
-            # Show which LLM backend is active
             print()
             print(f"  {clr('live translation running', BOLD + GREEN)}")
-            if not self.use_llm:
-                print(f"  {clr('letters only mode', DIM)}")
-            elif ANTHROPIC_API_KEY:
-                print(f"  {clr('LLM: Claude Haiku', CYAN)} — pause signing for natural English")
+            if self.use_llm:
+                print(f"  {clr('LLM:', DIM)} {active_llm_label()} — pause signing for natural English")
             else:
-                print(f"  {clr('LLM: Ollama fallback', YELLOW)} ({OLLAMA_MODEL}) — ANTHROPIC_API_KEY not set")
+                print(f"  {clr('letters only mode', DIM)}")
             print(); print(); print()
 
             llm_task = asyncio.create_task(self._llm_loop())
