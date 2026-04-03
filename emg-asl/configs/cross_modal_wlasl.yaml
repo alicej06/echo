@@ -1,0 +1,59 @@
+# Cross-Modal Training -- WLASL Video + EMG (IYA Nvidia Lab)
+# Requires: data/wlasl/landmarks.npz (run download_wlasl.py --extract-landmarks first)
+# 8 GPUs recommended, 128 GB RAM
+#
+# Equivalent CLI invocation (config loading is on the roadmap; use args today):
+#   torchrun --nproc_per_node=8 scripts/train_gpu_ddp.py \
+#       --model cross_modal \
+#       --data-dir data/raw/ \
+#       --video-dir data/wlasl/ \
+#       --epochs 100 \
+#       --batch-size 512 \
+#       --lr 1.0e-4 \
+#       --grad-accum 4 \
+#       --amp \
+#       --output-dir models/gpu/ \
+#       --wandb \
+#       --wandb-project maia-emg-asl
+#
+# InfoNCE note: effective batch size = batch_size * grad_accum = 512 * 4 = 2048.
+# Larger effective batch means more in-batch negatives, which directly improves
+# contrastive learning quality for the 2000-word WLASL vocabulary.
+#
+# emg_input_dim = WINDOW_SIZE_SAMPLES(40) * N_CHANNELS(8) = 320 (from constants.py)
+# vision_input_dim = 63  (21 MediaPipe hand landmarks * 3 xyz = 63 floats per frame)
+
+model:
+  type: cross_modal
+  emg_input_dim: 320
+  vision_input_dim: 63
+  embed_dim: 256        # larger shared space for 2000-word vocabulary
+  temperature: 0.07
+
+training:
+  epochs: 100
+  batch_size: 512       # large batch critical for InfoNCE (more negatives = better)
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
+  grad_accum: 4         # effective batch = 2048
+  amp: true
+  early_stop_patience: 15
+
+data:
+  emg_dir: data/raw/
+  wlasl_landmarks: data/wlasl/landmarks.npz
+  augment: true
+  augment_strength: strong
+
+optimizer:
+  name: adamw
+
+scheduler:
+  name: cosine
+
+output:
+  model_dir: models/gpu/
+  run_name: cross_modal_wlasl
+  wandb_project: maia-emg-asl
+  save_gallery: true    # also save class_gallery.npy

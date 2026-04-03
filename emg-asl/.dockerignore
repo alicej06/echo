@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore — EMG-ASL inference server
+# Keep the build context lean: exclude everything the runtime image does not need.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python cache / bytecode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+*.egg
+.eggs
+dist/
+build/
+
+# Environment variables / secrets
+.env
+.env.*
+*.env
+
+# Node (not used server-side, but keeps mobile/ clean)
+node_modules/
+
+# Project sub-trees not needed for server runtime
+mobile/
+hardware/
+notebooks/
+docs/
+
+# Tests — not shipped in the container
+tests/
+
+# Raw and externally-sourced data (too large; mounted as a volume at runtime)
+data/raw/
+data/external/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE / OS artifacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# CI / coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts from local pyproject.toml installs
+*.so

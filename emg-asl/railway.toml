@@ -1,0 +1,16 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python -m uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+[env]
+PORT = "8000"
+MAIA_DISABLE_AUTH = "0"
+PYTHONUNBUFFERED = "1"
+PYTHONDONTWRITEBYTECODE = "1"

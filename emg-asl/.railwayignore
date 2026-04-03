@@ -1,0 +1,32 @@
+# Large data directories
+data/
+notebooks/
+docs/
+hardware/
+mobile/
+scripts/slurm/
+
+# Development files
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+
+# Test files
+tests/
+scripts/smoke_test.py
+scripts/demo_pipeline.py
+scripts/benchmark_models.py
+scripts/augmentation_demo.py
+
+# Local configs (use Railway environment variables instead)
+.env
+*.env.local
+
+# Model files (downloaded from R2 at startup, not committed)
+models/*.pt
+models/*.onnx
+models/calibrated/
+models/gpu/
