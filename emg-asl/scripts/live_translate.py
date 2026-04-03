@@ -69,6 +69,48 @@ _NYQ = SAMPLE_RATE / 2.0
 _SOS = butter(4, [20.0 / _NYQ, 95.0 / _NYQ], btype="band", output="sos")
 
 # ---------------------------------------------------------------------------
+# WebSocket broadcast server (optional, --ws-port)
+# Broadcasts JSON events to connected browser clients:
+#   {"type": "letter", "letter": "A", "confidence": 0.94}
+#   {"type": "sentence", "text": "Hello world"}
+#   {"type": "status", "connected": true, "device": "My Myo"}
+# ---------------------------------------------------------------------------
+
+_ws_clients: set = set()
+
+
+async def _ws_broadcast(payload: dict) -> None:
+    if not _ws_clients:
+        return
+    msg = json.dumps(payload)
+    dead = set()
+    for ws in _ws_clients:
+        try:
+            await ws.send(msg)
+        except Exception:
+            dead.add(ws)
+    _ws_clients.difference_update(dead)
+
+
+async def _ws_server_handler(websocket) -> None:  # type: ignore[type-arg]
+    _ws_clients.add(websocket)
+    try:
+        await websocket.wait_closed()
+    finally:
+        _ws_clients.discard(websocket)
+
+
+async def _start_ws_server(port: int, clr_fn, CYAN: str, YELLOW: str) -> None:
+    try:
+        import websockets  # type: ignore[import]
+    except ImportError:
+        print(f"  {clr_fn('[ws]', YELLOW)}  websockets not installed — run: pip install websockets")
+        return
+    server = await websockets.serve(_ws_server_handler, "localhost", port)
+    print(f"  {clr_fn('ws', CYAN)}  broadcast server on ws://localhost:{port}")
+    await server.wait_closed()
+
+# ---------------------------------------------------------------------------
 # Terminal colors
 # ---------------------------------------------------------------------------
 
@@ -253,7 +295,7 @@ def render(letter: str, conf: float, letter_stream: list[str], sentence: str) ->
 # Myo session — uses dl-myo for clean BLE management
 # ---------------------------------------------------------------------------
 
-def _make_session(model: LSTMClassifier, device_name: str, use_llm: bool):
+def _make_session(model: LSTMClassifier, device_name: str, use_llm: bool, ws_port: int = 0):
     """Build and return a MyoClient subclass instance ready to run."""
     from myo import MyoClient
     from myo.types import (
@@ -282,6 +324,8 @@ def _make_session(model: LSTMClassifier, device_name: str, use_llm: bool):
             pending_letters.append(letter)
             last_emit_ts[0] = now
             last_letter_ts[0] = now
+            if ws_port:
+                asyncio.create_task(_ws_broadcast({"type": "letter", "letter": letter, "confidence": round(float(conf), 4)}))
         render(letter, conf, letter_stream, sentence[0])
 
     class EchoMyo(MyoClient):
@@ -327,12 +371,16 @@ def _make_session(model: LSTMClassifier, device_name: str, use_llm: bool):
             sentence[0] = clr("...", DIM)
             sentence[0] = await llm_translate(to_translate)
             llm_running[0] = False
+            if ws_port:
+                await _ws_broadcast({"type": "sentence", "text": sentence[0]})
 
     async def run() -> None:
         print(f"  {clr('ble', CYAN)}  scanning for '{device_name}'...")
 
         client = await EchoMyo.with_device(name=device_name)
         print(f"  {clr('ble', CYAN)}  connected")
+        if ws_port:
+            await _ws_broadcast({"type": "status", "connected": True, "device": device_name})
 
         await client.setup(
             emg_mode=EMGMode.SEND_EMG,
@@ -381,9 +429,13 @@ async def main(args: argparse.Namespace) -> None:
         return
 
     model = load_model(Path(args.model))
-    run = _make_session(model, device_name=args.device, use_llm=not args.no_llm)
+    ws_port = getattr(args, "ws_port", 0) or 0
+    run = _make_session(model, device_name=args.device, use_llm=not args.no_llm, ws_port=ws_port)
+    tasks = [asyncio.create_task(run())]
+    if ws_port:
+        tasks.append(asyncio.create_task(_start_ws_server(ws_port, clr, CYAN, YELLOW)))
     try:
-        await run()
+        await asyncio.gather(*tasks)
     except KeyboardInterrupt:
         pass
 
@@ -394,4 +446,6 @@ if __name__ == "__main__":
     parser.add_argument("--device", default="Myo", help="BLE name of your Myo (default: Myo)")
     parser.add_argument("--scan", action="store_true", help="List nearby BLE devices and exit")
     parser.add_argument("--no-llm", action="store_true", help="Skip LLM sentence reconstruction")
+    parser.add_argument("--ws-port", type=int, default=0, dest="ws_port",
+                        help="Start a WebSocket broadcast server on this port for the web frontend (e.g. 8765)")
     asyncio.run(main(parser.parse_args()))
