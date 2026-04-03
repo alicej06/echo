@@ -1,9 +1,9 @@
 # Echo — EMG-ASL Live Translation
 
-Real-time ASL fingerspelling recognition via the Myo armband + Claude.
+Real-time ASL fingerspelling recognition via the Myo armband + LLM.
 
 ```
-Myo BLE  →  LSTM classifier  →  letters  →  Claude Haiku  →  natural English
+Myo BLE  →  LSTM classifier  →  letters  →  Claude / Ollama  →  natural English
 ```
 
 ---
@@ -14,9 +14,14 @@ The **Thalmic Myo armband** sits just below your elbow and reads 8 forearm
 muscle channels at 200 Hz over Bluetooth Low Energy. A sliding 200ms window
 of filtered EMG feeds an LSTM that outputs a letter prediction (A-Z) with a
 confidence score. When you pause signing for ~2 seconds, the accumulated
-letters are sent to Claude Haiku which reconstructs them into natural English.
+letters are sent to an LLM which reconstructs them into natural English.
 
 No camera. No dongle. No MyoConnect. Pure BLE on modern macOS.
+
+**LLM backends (automatic fallback):**
+- **Claude Haiku** — best quality, set `ANTHROPIC_API_KEY` to use
+- **Ollama (local, free)** — auto-fallback when no API key; runs `llama3.2` on your machine
+- **`--no-llm`** — letters only, no sentence reconstruction
 
 ---
 
@@ -31,16 +36,31 @@ pip install -r requirements-live.txt
 ```
 
 > Python 3.10+ required. `requirements-live.txt` installs only what the live
-> pipeline needs: `bleak`, `torch`, `scipy`, `numpy`, `anthropic`. The full
-> `requirements.txt` is for the ML training pipeline and has many more deps.
+> pipeline needs: `bleak`, `torch`, `scipy`, `numpy`, `anthropic`, `openai`.
+> The full `requirements.txt` is for the ML training pipeline.
 
-### 2. Set your API key (for sentence reconstruction)
+### 2. Set up your LLM backend
 
+**Option A: Claude Haiku (best quality)**
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
-Skip this step if you only want raw letter output (use `--no-llm`).
+**Option B: Ollama (free, runs locally, no API key needed)**
+```bash
+# Install Ollama: https://ollama.com
+ollama pull llama3.2
+# No env var needed — script detects missing key and falls back automatically
+```
+
+**Option C: Letters only (no LLM)**
+```bash
+python scripts/live_translate.py --no-llm
+```
+
+The script tries Claude first. If `ANTHROPIC_API_KEY` is not set or errors,
+it automatically falls back to Ollama at `http://localhost:11434`. No manual
+toggle required — it just works.
 
 ### 3. Pair your Myo
 
@@ -122,7 +142,7 @@ Typical accuracy improvement:
 | `--device NAME` | `"Myo"` | BLE name of your Myo armband |
 | `--scan` | — | List nearby BLE devices and exit |
 | `--model PATH` | `models/asl_emg_classifier.pt` | Path to `.pt` model weights (see note below) |
-| `--no-llm` | — | Skip Claude, show raw letters only |
+| `--no-llm` | — | Skip LLM entirely, show raw letters only |
 
 ### `calibrate_quick.py`
 
@@ -165,8 +185,8 @@ emg-asl/
 4. Butterworth bandpass filter 20-95Hz removes motion artifact and noise
 5. LSTM processes the window and outputs softmax probabilities over 26 classes
 6. Letter emitted if confidence >= 0.75 and debounce window (300ms) has passed
-7. After 1.8s pause in signing, pending letters sent to Claude Haiku
-8. Claude reconstructs letters into natural English, handling recognition errors
+7. After 1.8s pause in signing, pending letters sent to LLM
+8. Claude Haiku (or Ollama fallback) reconstructs letters into natural English
 
 ---
 
@@ -188,6 +208,20 @@ python scripts/calibrate_quick.py --user me
 **"No module named 'bleak'"** or any other import error
 ```bash
 pip install -r requirements-live.txt
+```
+
+**Ollama not responding / "connection refused"**
+Ollama needs to be running as a background service:
+```bash
+ollama serve          # starts the server
+ollama pull llama3.2  # download the model (one-time, ~2GB)
+```
+Or override the model: `export OLLAMA_MODEL=llama3.1:8b`
+
+**Want to force Ollama even if you have an API key**
+```bash
+unset ANTHROPIC_API_KEY
+python scripts/live_translate.py --device "My Myo"
 ```
 
 **macOS Bluetooth permission denied**

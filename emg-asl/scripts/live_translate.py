@@ -18,10 +18,13 @@ Usage (from project root):
     python scripts/live_translate.py --model models/calibrated/me/model.pt
 
 Requirements:
-    pip install bleak anthropic
-    export ANTHROPIC_API_KEY="sk-ant-..."
+    pip install -r requirements-live.txt
 
-First run: macOS will prompt for Bluetooth permission. Allow it.
+LLM backend (automatic fallback):
+    1. Claude Haiku  — set ANTHROPIC_API_KEY env var (best quality)
+    2. Ollama local  — install Ollama + run: ollama pull llama3.2
+       Falls back automatically when ANTHROPIC_API_KEY is unset or errors.
+    3. --no-llm      — letters only, no sentence reconstruction
 """
 
 from __future__ import annotations
@@ -59,6 +62,8 @@ BUFFER_MAXLEN      = SAMPLE_RATE * 4
 LLM_PAUSE_S        = 1.8
 LLM_MIN_LETTERS    = 2
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+OLLAMA_BASE_URL    = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL       = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
 _NYQ = SAMPLE_RATE / 2.0
 _SOS = butter(4, [20.0 / _NYQ, 95.0 / _NYQ], btype="band", output="sos")
@@ -133,7 +138,7 @@ def predict(model: LSTMClassifier, window: np.ndarray) -> tuple[str, float]:
     return ASL_CLASSES[idx], float(probs[idx])
 
 # ---------------------------------------------------------------------------
-# LLM translation
+# LLM translation — Claude Haiku with automatic Ollama fallback
 # ---------------------------------------------------------------------------
 
 LLM_SYSTEM = (
@@ -144,9 +149,11 @@ LLM_SYSTEM = (
     "Output only the reconstructed English. No quotes, no explanation."
 )
 
-async def llm_translate(letters: list[str]) -> str:
+
+def _try_anthropic(letters_str: str) -> str | None:
+    """Attempt Claude Haiku. Returns text on success, None on any failure."""
     if not ANTHROPIC_API_KEY:
-        return "[set ANTHROPIC_API_KEY to enable sentence reconstruction]"
+        return None
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -154,11 +161,41 @@ async def llm_translate(letters: list[str]) -> str:
             model="claude-haiku-4-5-20251001",
             max_tokens=128,
             system=LLM_SYSTEM,
-            messages=[{"role": "user", "content": "".join(letters)}],
+            messages=[{"role": "user", "content": letters_str}],
         )
         return msg.content[0].text.strip()
     except Exception as exc:
+        print(f"\n  {clr('[anthropic error]', YELLOW)} {exc} — trying Ollama fallback")
+        return None
+
+
+def _try_ollama(letters_str: str) -> str | None:
+    """Attempt Ollama via OpenAI-compat endpoint. Returns text or None."""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key="ollama", base_url=OLLAMA_BASE_URL)
+        resp = client.chat.completions.create(
+            model=OLLAMA_MODEL,
+            max_tokens=128,
+            messages=[
+                {"role": "system", "content": LLM_SYSTEM},
+                {"role": "user",   "content": letters_str},
+            ],
+        )
+        result = resp.choices[0].message.content.strip()
+        print(f"\n  {clr('[ollama]', DIM)} used {OLLAMA_MODEL} for reconstruction")
+        return result
+    except Exception as exc:
         return f"[LLM error: {exc}]"
+
+
+async def llm_translate(letters: list[str]) -> str:
+    letters_str = "".join(letters)
+    # Try Anthropic first, fall back to Ollama automatically
+    result = _try_anthropic(letters_str)
+    if result is not None:
+        return result
+    return _try_ollama(letters_str) or "[set ANTHROPIC_API_KEY or install Ollama to enable reconstruction]"
 
 # ---------------------------------------------------------------------------
 # Display
@@ -265,15 +302,15 @@ class MyoSession:
                 except Exception:
                     pass
 
+            # Show which LLM backend is active
             print()
             print(f"  {clr('live translation running', BOLD + GREEN)}")
-            if self.use_llm and ANTHROPIC_API_KEY:
-                print(f"  {clr('LLM active', CYAN)} — pause signing to get natural English\n")
-            elif self.use_llm:
-                print(f"  {clr('LLM inactive', YELLOW)} — set ANTHROPIC_API_KEY to enable\n")
+            if not self.use_llm:
+                print(f"  {clr('letters only mode', DIM)}")
+            elif ANTHROPIC_API_KEY:
+                print(f"  {clr('LLM: Claude Haiku', CYAN)} — pause signing for natural English")
             else:
-                print(f"  {clr('letters only mode', DIM)}\n")
-
+                print(f"  {clr('LLM: Ollama fallback', YELLOW)} ({OLLAMA_MODEL}) — ANTHROPIC_API_KEY not set")
             print(); print(); print()
 
             llm_task = asyncio.create_task(self._llm_loop())
@@ -304,7 +341,7 @@ class MyoSession:
 async def main(args: argparse.Namespace) -> None:
     print()
     print(clr("  Echo  |  Live ASL Translation", BOLD))
-    print(clr("  Myo BLE -> LSTM -> letters -> Claude -> English", DIM))
+    print(clr("  Myo BLE -> LSTM -> letters -> LLM -> English", DIM))
     print()
     if args.scan:
         await scan_devices()
