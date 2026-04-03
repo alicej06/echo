@@ -70,6 +70,34 @@ export default function TranslatePage() {
   const prevLetterRef = useRef("");
   const prevSentenceRef = useRef("");
   const streamEndRef = useRef<HTMLDivElement>(null);
+  const sessionStartRef = useRef<number>(Date.now());
+
+  // Save session to localStorage on disconnect
+  useEffect(() => {
+    if (status === "connected" || status === "demo") {
+      sessionStartRef.current = Date.now();
+    }
+    if (status === "disconnected" && letterStream.length > 0) {
+      try {
+        const raw = localStorage.getItem("maia_sessions");
+        const sessions = raw ? (JSON.parse(raw) as object[]) : [];
+        sessions.push({
+          id: Date.now().toString(),
+          date: new Date().toISOString(),
+          letters: letterStream,
+          sentences: sentence ? [sentence] : [],
+          duration: Date.now() - sessionStartRef.current,
+        });
+        localStorage.setItem(
+          "maia_sessions",
+          JSON.stringify(sessions.slice(-50)),
+        );
+      } catch {
+        // ignore
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   // Trigger animation on new letter
   useEffect(() => {

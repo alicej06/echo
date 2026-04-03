@@ -43,11 +43,12 @@ export function Nav() {
         <div className="flex items-center gap-1">
           {links.map((link) => {
             const active = pathname === link.href;
+            const Icon = link.icon;
             return (
               <Link
                 key={link.href}
                 href={link.href}
-                className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200"
                 style={{
                   color: active ? "#22d3ee" : "#a1a1aa",
                   backgroundColor: active
@@ -58,6 +59,7 @@ export function Nav() {
                     : "1px solid transparent",
                 }}
               >
+                {Icon && <Icon className="w-3.5 h-3.5" />}
                 {link.label}
               </Link>
             );

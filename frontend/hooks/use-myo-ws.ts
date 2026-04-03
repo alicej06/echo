@@ -13,6 +13,16 @@ export interface MyoState {
 }
 
 const DEMO_LETTERS = "HELLO WORLD MAIA ASL".split("").filter((c) => c !== " ");
+const DEMO_SENTENCES = [
+  "Hello, nice to meet you.",
+  "How are you today?",
+  "My name is MAIA.",
+  "I use ASL to communicate.",
+  "Can we meet tomorrow?",
+  "Thank you for your help.",
+  "I need a moment please.",
+  "That sounds good to me.",
+];
 const WS_URL_DEFAULT: string =
   (typeof process !== "undefined" &&
   typeof process.env?.NEXT_PUBLIC_MAIA_WS_URL === "string"
@@ -69,18 +79,20 @@ export function useMyoWs() {
       const letter = DEMO_LETTERS[demoIndexRef.current % DEMO_LETTERS.length];
       demoIndexRef.current += 1;
       const conf = 0.7 + Math.random() * 0.29;
+      // Emit a realistic demo sentence every full cycle through the letters
+      const sentenceIdx =
+        Math.floor(demoIndexRef.current / DEMO_LETTERS.length) %
+        DEMO_SENTENCES.length;
+      const emitSentence = demoIndexRef.current % DEMO_LETTERS.length === 0;
 
       setState((s) => {
         const nextStream = [...s.letterStream, letter].slice(-MAX_STREAM);
-        const joined = nextStream.join("").toLowerCase();
-        const words = joined.match(/\b\w{3,}\b/g) ?? [];
-        const sentence = words.slice(-8).join(" ");
         return {
           ...s,
           currentLetter: letter,
           confidence: conf,
           letterStream: nextStream,
-          sentence: sentence || s.sentence,
+          sentence: emitSentence ? DEMO_SENTENCES[sentenceIdx] : s.sentence,
         };
       });
     }, 600);
