@@ -38,7 +38,7 @@ pip install -r requirements-live.txt
 ```
 
 > Python 3.10+ required. `requirements-live.txt` installs only what the live
-> pipeline needs: `bleak`, `torch`, `scipy`, `numpy`, `anthropic`, `openai`.
+> pipeline needs: `dl-myo`, `torch`, `scipy`, `numpy`, `anthropic`, `openai`.
 > The full `requirements.txt` is for the ML training pipeline.
 
 ### 2. Set up your LLM backend

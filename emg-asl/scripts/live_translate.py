@@ -3,25 +3,23 @@
 live_translate.py — real-time ASL -> natural English via Myo + LLM.
 
 Usage (from project root):
-    python scripts/live_translate.py
+    source .venv/bin/activate
+    python3 scripts/live_translate.py --device "My Myo"
 
     # Find your Myo's BLE name first:
-    python scripts/live_translate.py --scan
+    python3 scripts/live_translate.py --scan
 
-    # If your Myo shows as something other than "Myo":
-    python scripts/live_translate.py --device "My Myo"
-
-    # Skip LLM (no API key needed):
-    python scripts/live_translate.py --no-llm
+    # Skip LLM (letters only):
+    python3 scripts/live_translate.py --no-llm
 
     # Use a personal calibrated model:
-    python scripts/live_translate.py --model models/calibrated/me/model.pt
+    python3 scripts/live_translate.py --model models/calibrated/me/model.pt
 
 LLM backends (automatic priority order):
-    1. Claude Haiku  — set ANTHROPIC_API_KEY (best quality)
-    2. Ollama cloud  — set OLLAMA_API_KEY (free cloud, uses gemma3:4b)
-    3. Ollama local  — runs at localhost:11434 if installed
-    4. --no-llm      — letters only
+    1. Claude Haiku      — set ANTHROPIC_API_KEY
+    2. Ollama cloud      — set OLLAMA_API_KEY (free, uses gemma3:4b)
+    3. Ollama local      — install Ollama + ollama pull llama3.2
+    4. --no-llm          — letters only
 """
 
 from __future__ import annotations
@@ -45,9 +43,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.constants import (
-    ASL_CLASSES, BLE_CONTROL_UUID, BLE_EMG_CHAR_UUIDS,
-    CONFIDENCE_THRESHOLD, DEBOUNCE_MS, HOP_SAMPLES,
-    LSTM_DROPOUT, LSTM_HIDDEN, LSTM_LAYERS, MYO_ENABLE_EMG_CMD,
+    ASL_CLASSES, CONFIDENCE_THRESHOLD, DEBOUNCE_MS, HOP_SAMPLES,
+    LSTM_DROPOUT, LSTM_HIDDEN, LSTM_LAYERS,
     N_CHANNELS, N_CLASSES, SAMPLE_RATE, WINDOW_SAMPLES,
 )
 from src.models.lstm_classifier import LSTMClassifier
@@ -104,7 +101,7 @@ async def scan_devices() -> None:
     for addr, name in sorted(named, key=lambda x: x[1] or ""):
         arrow = clr("  <-- likely your Myo", GREEN) if "myo" in (name or "").lower() else ""
         print(f"  {addr:<40}  {name}{arrow}")
-    print(f"\n  Run with: python scripts/live_translate.py --device \"<name>\"")
+    print(f"\n  Run with: python3 scripts/live_translate.py --device \"<name>\"")
 
 # ---------------------------------------------------------------------------
 # Model
@@ -128,7 +125,7 @@ def load_model(path: Path) -> LSTMClassifier:
             print(f"  {clr('model', YELLOW)}  could not load ({exc}) — using random init")
     else:
         print(f"  {clr('model', YELLOW)}  {path.name} not found — random init")
-        print(f"           run: python scripts/calibrate_quick.py --user me")
+        print(f"           run: python3 scripts/calibrate_quick.py --user me")
     model.eval()
     return model
 
@@ -222,7 +219,7 @@ async def llm_translate(letters: list[str]) -> str:
         _try_anthropic(text)
         or _try_ollama_cloud(text)
         or _try_ollama_local(text)
-        or "[no LLM available — set ANTHROPIC_API_KEY or OLLAMA_API_KEY]"
+        or "[no LLM available]"
     )
 
 
@@ -253,119 +250,121 @@ def render(letter: str, conf: float, letter_stream: list[str], sentence: str) ->
     )
 
 # ---------------------------------------------------------------------------
-# BLE session
+# Myo session — uses dl-myo for clean BLE management
 # ---------------------------------------------------------------------------
 
-class MyoSession:
-    def __init__(self, model: LSTMClassifier, device_name: str, use_llm: bool) -> None:
-        self.model = model
-        self.device_name = device_name
-        self.use_llm = use_llm
-        self._buf: collections.deque[list[int]] = collections.deque(maxlen=BUFFER_MAXLEN)
-        self._new_since_last = 0
-        self._last_emit_ts = 0.0
-        self._last_letter_ts = 0.0
-        self._letter_stream: list[str] = []
-        self._pending_letters: list[str] = []
-        self._sentence = ""
-        self._llm_running = False
+def _make_session(model: LSTMClassifier, device_name: str, use_llm: bool):
+    """Build and return a MyoClient subclass instance ready to run."""
+    from myo import MyoClient
+    from myo.types import (
+        AggregatedData, ClassifierEvent, EMGData, EMGDataSingle,
+        EMGMode, IMUMode, ClassifierMode, FVData, IMUData, MotionEvent,
+    )
 
-    def _on_emg(self, _handle: int, data: bytearray) -> None:
-        if len(data) < 16:
-            return
-        for i in range(2):
-            self._buf.append(list(struct.unpack_from("8b", data, i * 8)))
-            self._new_since_last += 1
+    buf: collections.deque = collections.deque(maxlen=BUFFER_MAXLEN)
+    new_since_last = [0]
+    last_emit_ts   = [0.0]
+    last_letter_ts = [0.0]
+    letter_stream: list[str] = []
+    pending_letters: list[str] = []
+    sentence       = [""]
+    llm_running    = [False]
 
-    def _infer(self) -> None:
-        if len(self._buf) < WINDOW_SAMPLES:
+    def _infer() -> None:
+        if len(buf) < WINDOW_SAMPLES:
             return
-        window = np.array(list(self._buf)[-WINDOW_SAMPLES:], dtype=np.float32) / 128.0
+        window = np.array(list(buf)[-WINDOW_SAMPLES:], dtype=np.float32) / 128.0
         window = sosfilt(_SOS, window, axis=0).astype(np.float32)
-        letter, conf = predict(self.model, window)
+        letter, conf = predict(model, window)
         now = time.monotonic()
-        if conf >= CONFIDENCE_THRESHOLD and (now - self._last_emit_ts) >= DEBOUNCE_MS / 1000.0:
-            self._letter_stream.append(letter)
-            self._pending_letters.append(letter)
-            self._last_emit_ts = now
-            self._last_letter_ts = now
-        render(letter, conf, self._letter_stream, self._sentence)
+        if conf >= CONFIDENCE_THRESHOLD and (now - last_emit_ts[0]) >= DEBOUNCE_MS / 1000.0:
+            letter_stream.append(letter)
+            pending_letters.append(letter)
+            last_emit_ts[0] = now
+            last_letter_ts[0] = now
+        render(letter, conf, letter_stream, sentence[0])
 
-    async def _llm_loop(self) -> None:
+    class EchoMyo(MyoClient):
+        async def on_emg_data(self, emg: EMGData) -> None:
+            # Two samples per packet, 8 channels each — identical to raw BLE
+            buf.append(list(emg.sample1))
+            buf.append(list(emg.sample2))
+            new_since_last[0] += 2
+            if new_since_last[0] >= HOP_SAMPLES:
+                new_since_last[0] = 0
+                _infer()
+
+        async def on_emg_data_aggregated(self, eds: EMGDataSingle) -> None:
+            pass
+
+        async def on_aggregated_data(self, ad: AggregatedData) -> None:
+            pass
+
+        async def on_fv_data(self, fvd: FVData) -> None:
+            pass
+
+        async def on_imu_data(self, imu: IMUData) -> None:
+            pass
+
+        async def on_motion_event(self, me: MotionEvent) -> None:
+            pass
+
+        async def on_classifier_event(self, ce: ClassifierEvent) -> None:
+            pass
+
+    async def _llm_loop() -> None:
         while True:
             await asyncio.sleep(0.2)
-            if not self.use_llm or self._llm_running or not self._pending_letters:
+            if not use_llm or llm_running[0] or not pending_letters:
                 continue
-            if (time.monotonic() - self._last_letter_ts) < LLM_PAUSE_S:
+            if (time.monotonic() - last_letter_ts[0]) < LLM_PAUSE_S:
                 continue
-            if len(self._pending_letters) < LLM_MIN_LETTERS:
+            if len(pending_letters) < LLM_MIN_LETTERS:
                 continue
-            to_translate = list(self._pending_letters)
-            self._pending_letters.clear()
-            self._llm_running = True
-            self._sentence = clr("...", DIM)
-            self._sentence = await llm_translate(to_translate)
-            self._llm_running = False
+            to_translate = list(pending_letters)
+            pending_letters.clear()
+            llm_running[0] = True
+            sentence[0] = clr("...", DIM)
+            sentence[0] = await llm_translate(to_translate)
+            llm_running[0] = False
 
-    async def run(self) -> None:
-        from bleak import BleakClient, BleakScanner
+    async def run() -> None:
+        print(f"  {clr('ble', CYAN)}  scanning for '{device_name}'...")
 
-        print(f"  {clr('ble', CYAN)}  scanning for '{self.device_name}'...")
-        device = await BleakScanner.find_device_by_name(self.device_name, timeout=10.0)
-        if device is None:
-            print(
-                f"\n  {clr('not found', RED)}  '{self.device_name}' not visible.\n"
-                f"\n  Find your Myo's name:\n"
-                f"  {clr('python scripts/live_translate.py --scan', CYAN)}\n"
-                f"\n  Then re-run with:\n"
-                f"  {clr('python scripts/live_translate.py --device \"<name>\"', CYAN)}\n"
-            )
-            return
+        client = await EchoMyo.with_device(name=device_name)
+        print(f"  {clr('ble', CYAN)}  connected")
 
-        print(f"  {clr('ble', CYAN)}  found {device.name} ({device.address})")
+        await client.setup(
+            emg_mode=EMGMode.SEND_EMG,
+            imu_mode=IMUMode.NONE,
+            classifier_mode=ClassifierMode.DISABLED,
+        )
+        print(f"  {clr('myo', CYAN)}  EMG streaming enabled")
 
-        async with BleakClient(device, timeout=15.0) as client:
-            print(f"  {clr('ble', CYAN)}  connected")
-            try:
-                await client.write_gatt_char(BLE_CONTROL_UUID, MYO_ENABLE_EMG_CMD, response=True)
-                print(f"  {clr('myo', CYAN)}  raw EMG streaming enabled")
-            except Exception as exc:
-                print(f"  {clr('myo', YELLOW)}  enable cmd failed ({exc}), continuing")
+        print()
+        print(f"  {clr('live translation running', BOLD + GREEN)}")
+        if use_llm:
+            print(f"  {clr('LLM:', DIM)} {active_llm_label()} — pause signing for natural English")
+        else:
+            print(f"  {clr('letters only mode', DIM)}")
+        print(); print(); print()
 
-            for uuid in BLE_EMG_CHAR_UUIDS:
-                try:
-                    await client.start_notify(uuid, self._on_emg)
-                except Exception:
-                    pass
+        llm_task = asyncio.create_task(_llm_loop())
+        try:
+            await client.start()
+            # keep running until Ctrl-C
+            while True:
+                await asyncio.sleep(1)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            pass
+        finally:
+            llm_task.cancel()
+            await client.stop()
+            await client.disconnect()
+            print(f"\n\n  {clr('transcript', DIM)}: {' '.join(letter_stream)}")
+            print(f"  {clr('last echo', VIOLET)}: {sentence[0]}")
 
-            print()
-            print(f"  {clr('live translation running', BOLD + GREEN)}")
-            if self.use_llm:
-                print(f"  {clr('LLM:', DIM)} {active_llm_label()} — pause signing for natural English")
-            else:
-                print(f"  {clr('letters only mode', DIM)}")
-            print(); print(); print()
-
-            llm_task = asyncio.create_task(self._llm_loop())
-            hop_s = HOP_SAMPLES / SAMPLE_RATE
-
-            try:
-                while True:
-                    await asyncio.sleep(hop_s)
-                    if self._new_since_last >= HOP_SAMPLES:
-                        self._new_since_last = 0
-                        self._infer()
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                pass
-            finally:
-                llm_task.cancel()
-                for uuid in BLE_EMG_CHAR_UUIDS:
-                    try:
-                        await client.stop_notify(uuid)
-                    except Exception:
-                        pass
-                print(f"\n\n  {clr('transcript', DIM)}: {' '.join(self._letter_stream)}")
-                print(f"  {clr('last echo', VIOLET)}: {self._sentence}")
+    return run
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -376,13 +375,15 @@ async def main(args: argparse.Namespace) -> None:
     print(clr("  Echo  |  Live ASL Translation", BOLD))
     print(clr("  Myo BLE -> LSTM -> letters -> LLM -> English", DIM))
     print()
+
     if args.scan:
         await scan_devices()
         return
+
     model = load_model(Path(args.model))
-    session = MyoSession(model, device_name=args.device, use_llm=not args.no_llm)
+    run = _make_session(model, device_name=args.device, use_llm=not args.no_llm)
     try:
-        await session.run()
+        await run()
     except KeyboardInterrupt:
         pass
 
