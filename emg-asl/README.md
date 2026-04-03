@@ -27,10 +27,12 @@ No camera. No dongle. No MyoConnect. Pure BLE on modern macOS.
 ```bash
 git clone https://github.com/alicej06/echo.git
 cd echo/emg-asl
-pip install -r requirements.txt
+pip install -r requirements-live.txt
 ```
 
-> Python 3.10+ required. Install `bleak`, `torch`, `scipy`, `numpy`, `anthropic`.
+> Python 3.10+ required. `requirements-live.txt` installs only what the live
+> pipeline needs: `bleak`, `torch`, `scipy`, `numpy`, `anthropic`. The full
+> `requirements.txt` is for the ML training pipeline and has many more deps.
 
 ### 2. Set your API key (for sentence reconstruction)
 
@@ -119,7 +121,7 @@ Typical accuracy improvement:
 |------|---------|-------------|
 | `--device NAME` | `"Myo"` | BLE name of your Myo armband |
 | `--scan` | — | List nearby BLE devices and exit |
-| `--model PATH` | `models/asl_emg_classifier.pt` | Path to model weights |
+| `--model PATH` | `models/asl_emg_classifier.pt` | Path to `.pt` model weights (see note below) |
 | `--no-llm` | — | Skip Claude, show raw letters only |
 
 ### `calibrate_quick.py`
@@ -137,17 +139,24 @@ Typical accuracy improvement:
 ```
 emg-asl/
 ├── scripts/
-│   ├── live_translate.py       # Real-time BLE -> LSTM -> LLM pipeline
-│   └── calibrate_quick.py      # Personal calibration (5 min)
+│   ├── live_translate.py        # Real-time BLE -> LSTM -> LLM pipeline
+│   └── calibrate_quick.py       # Personal calibration (5 min)
 ├── src/
-│   ├── constants.py            # Sample rate, window size, BLE UUIDs
+│   ├── constants.py             # Sample rate, window size, BLE UUIDs
 │   └── models/
-│       └── lstm_classifier.py  # 2-layer LSTM, input (B, 40, 8), output (B, 26)
+│       └── lstm_classifier.py   # 2-layer LSTM, input (B, 40, 8), output (B, 26)
 ├── models/
-│   ├── asl_emg_classifier.pt   # Base model weights
-│   └── calibrated/             # Personal models saved here
-└── requirements.txt
+│   ├── asl_emg_classifier.onnx  # Base model (ONNX format, for production inference)
+│   └── calibrated/              # Personal .pt models saved here after calibration
+├── requirements-live.txt        # Minimal deps for live_translate + calibrate_quick
+└── requirements.txt             # Full ML training pipeline deps
 ```
+
+> **Note on model format:** The repo ships an ONNX base model. `live_translate.py`
+> expects a PyTorch `.pt` file. The fastest path to a working `.pt` is to run
+> personal calibration first (`calibrate_quick.py`) — it produces a
+> `models/calibrated/<user>/model.pt` you can use immediately. A pre-trained
+> `.pt` base model will be added once training runs complete.
 
 **Signal pipeline:**
 1. BLE GATT notifications deliver 16 bytes (2 samples x 8 channels) at ~200Hz
@@ -176,9 +185,9 @@ First run with the base model will have moderate accuracy. Run calibration:
 python scripts/calibrate_quick.py --user me
 ```
 
-**"No module named 'bleak'"**
+**"No module named 'bleak'"** or any other import error
 ```bash
-pip install bleak anthropic scipy numpy torch
+pip install -r requirements-live.txt
 ```
 
 **macOS Bluetooth permission denied**

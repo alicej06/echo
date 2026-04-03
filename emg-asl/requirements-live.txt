@@ -1,0 +1,8 @@
+# Dependencies for live_translate.py and calibrate_quick.py only.
+# For the full ML training pipeline, use requirements.txt.
+
+numpy>=1.26,<3
+scipy>=1.12
+torch>=2.2
+bleak>=0.21          # BLE for modern macOS (CoreBluetooth, no dongle needed)
+anthropic>=0.25      # Claude Haiku for sentence reconstruction
