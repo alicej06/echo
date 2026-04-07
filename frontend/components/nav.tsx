@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Radio, MessageSquare, History, User, Zap } from "lucide-react";
+import { Radio, MessageSquare, History, User, Zap, Mic } from "lucide-react";
 import { useScrollNav } from "@/hooks/use-scroll-nav";
 
 const links = [
   { href: "/", label: "Home" },
+  { href: "/train", label: "Train", icon: Mic },
   { href: "/translate", label: "Translate", icon: Radio },
   { href: "/conversation", label: "Conversation", icon: MessageSquare },
   { href: "/history", label: "History", icon: History },
