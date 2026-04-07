@@ -1,0 +1,10 @@
+# Runtime dependencies — live inference and calibration only.
+# For the full ML training pipeline and dev tools, use requirements-dev.txt.
+
+numpy>=1.26,<3
+scipy>=1.12
+torch>=2.2
+dl-myo>=1.1.8    # Myo BLE driver — modern macOS, no dongle, no MyoConnect
+anthropic>=0.25  # Claude Haiku (primary LLM)
+openai>=1.0      # Ollama local fallback via OpenAI-compat endpoint
+websockets>=12   # Optional: WS broadcast server for the web frontend (--ws-port)

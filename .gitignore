@@ -1,0 +1,184 @@
+# =============================================================================
+# EMG-ASL Layer — .gitignore
+# Covers: Python, ML/training artifacts, data files, Jupyter, Node/Expo, macOS
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env.bak
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+MANIFEST
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test / quality tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.cover
+.hypothesis/
+
+# Type checking
+.dmypy.json
+dmypy.json
+
+# -----------------------------------------------------------------------------
+# Machine Learning / Training Artifacts
+# -----------------------------------------------------------------------------
+
+# Model checkpoints and weights (keep models/pretrained/ if it exists)
+*.ckpt
+*.pth
+*.pt
+*.h5
+*.hdf5
+*.pb
+
+# ONNX exports (keep committed pretrained exports if needed)
+*.onnx
+
+# Experiment tracking
+wandb/
+runs/
+mlruns/
+lightning_logs/
+outputs/
+
+# TensorBoard
+events.out.tfevents.*
+
+# -----------------------------------------------------------------------------
+# Data Files
+# -----------------------------------------------------------------------------
+
+# Raw and processed data directories
+data/raw/
+data/processed/
+
+# CSV files inside data/ (use wildcard relative pattern)
+data/**/*.csv
+data/**/*.npy
+data/**/*.npz
+data/**/*.pkl
+data/**/*.parquet
+
+# But preserve the data README
+!data/README.md
+
+# -----------------------------------------------------------------------------
+# Jupyter Notebooks
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb~
+
+# -----------------------------------------------------------------------------
+# Node / Expo / React Native
+# -----------------------------------------------------------------------------
+node_modules/
+.expo/
+.expo-shared/
+
+# Build outputs
+mobile/dist/
+mobile/build/
+mobile/web-build/
+*.tsbuildinfo
+
+# Expo EAS
+.eas/
+eas-update/
+
+# Metro bundler cache
+.metro-health-check*
+*.metro-*
+
+# React Native generated
+ios/build/
+android/build/
+android/.gradle/
+android/app/build/
+ios/Pods/
+ios/*.xcworkspace/xcuserdata/
+
+# -----------------------------------------------------------------------------
+# Environment Variables — NEVER commit secrets
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+*.env
+!.env.example
+
+# -----------------------------------------------------------------------------
+# macOS
+# -----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# -----------------------------------------------------------------------------
+# Editors / IDEs
+# -----------------------------------------------------------------------------
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# Cursor AI
+.cursor/
+
+# -----------------------------------------------------------------------------
+# OS / Misc
+# -----------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.log
+*.tmp
+*.bak
+*.orig
+
+# -----------------------------------------------------------------------------
+# Keep tracked (override above patterns where needed)
+# -----------------------------------------------------------------------------
+!models/.gitkeep
+!data/README.md

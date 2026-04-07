@@ -1,0 +1,62 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# EMG-ASL Inference Stack
+#
+# Default:   docker-compose up -d
+# Training:  docker-compose --profile training up model-trainer
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Inference server (always-on) ───────────────────────────────────────────
+  inference-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: emg-asl-server:latest
+    container_name: emg-asl-inference
+    ports:
+      - "8000:8000"   # REST / FastAPI
+      - "8765:8765"   # WebSocket stream
+    volumes:
+      # Hot-swap model weights without rebuilding the image
+      - ./models:/app/models
+      # Raw + processed data available read-only to the server
+      - ./data:/app/data:ro
+    environment:
+      MODEL_DIR: /app/models
+      ONNX_MODEL_PATH: /app/models/asl_emg_classifier.onnx
+      PYTORCH_MODEL_PATH: /app/models/asl_emg_classifier.pt
+      PROFILE_DIR: /app/profiles
+      WS_HOST: "0.0.0.0"
+      WS_PORT: "8765"
+      REST_PORT: "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── Model trainer (opt-in via --profile training) ──────────────────────────
+  model-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: emg-asl-server:latest
+    container_name: emg-asl-trainer
+    profiles:
+      - training
+    # Override the default uvicorn CMD with the training script
+    command: ["python", "scripts/train_real.py"]
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      MODEL_DIR: /app/models
+      ONNX_MODEL_PATH: /app/models/asl_emg_classifier.onnx
+      PYTORCH_MODEL_PATH: /app/models/asl_emg_classifier.pt
+    # No restart — let it run to completion and exit cleanly
+    restart: "no"

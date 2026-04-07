@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — MAIA ASL</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 680px; margin: 60px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.7; }
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    h2 { font-size: 18px; font-weight: 600; margin-top: 40px; }
+    p, li { color: #444; }
+    a { color: #4f46e5; }
+    .updated { color: #888; font-size: 14px; margin-bottom: 48px; }
+  </style>
+</head>
+<body>
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: March 31, 2026</p>
+
+  <p>MAIA ASL ("we", "our", or "the app") is built by MAIA Biotech. This policy explains what data the app collects and how it is used.</p>
+
+  <h2>Data We Collect</h2>
+  <p>MAIA ASL collects no personal data. Specifically:</p>
+  <ul>
+    <li><strong>EMG signals</strong> are processed entirely on your device or sent to our inference server for real-time classification. They are not stored, logged, or associated with any user identity.</li>
+    <li><strong>Calibration data</strong> is stored locally on your device using AsyncStorage. It never leaves your phone.</li>
+    <li><strong>Settings</strong> (server URL, device name, speech rate) are stored locally on your device. They are never transmitted.</li>
+  </ul>
+
+  <h2>No Account Required</h2>
+  <p>MAIA ASL does not require an account, email address, or any personal information to use.</p>
+
+  <h2>Bluetooth</h2>
+  <p>The app requests Bluetooth permission solely to connect to the Myo EMG wristband. Bluetooth data is used only for real-time EMG signal streaming and is not stored or transmitted beyond the inference pipeline.</p>
+
+  <h2>Inference Server</h2>
+  <p>When using the Railway WebSocket inference server, raw EMG window data (40 samples x 8 channels) is transmitted over an encrypted WebSocket connection for classification. This data is not stored on the server and is discarded immediately after the prediction is returned.</p>
+
+  <h2>Third-Party Services</h2>
+  <p>The app does not use analytics, advertising, or third-party tracking SDKs.</p>
+
+  <h2>Children</h2>
+  <p>MAIA ASL is not directed at children under 13 and does not knowingly collect information from children.</p>
+
+  <h2>Changes to This Policy</h2>
+  <p>We may update this policy as the app evolves. Any changes will be reflected on this page with an updated date.</p>
+
+  <h2>Contact</h2>
+  <p>Questions? Email us at <a href="mailto:calebsnewton@gmail.com">calebsnewton@gmail.com</a></p>
+</body>
+</html>
