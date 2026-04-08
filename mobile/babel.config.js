@@ -19,10 +19,6 @@ module.exports = function (api) {
           extensions: ['.ios.js', '.android.js', '.js', '.ts', '.tsx', '.json'],
         },
       ],
-      // Required for expo-router
-      'expo-router/babel',
-      // Must be last
-      'react-native-reanimated/plugin',
     ],
   };
 };

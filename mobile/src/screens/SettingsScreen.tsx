@@ -20,7 +20,6 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Slider from "@react-native-community/slider";
 
-import { useEMGConnection } from "../hooks/useEMGConnection";
 import { speechEngine } from "../tts/SpeechEngine";
 
 // ---------------------------------------------------------------------------
@@ -136,7 +135,8 @@ function reducer(state: State, action: Action): State {
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { setServerUrl, setDeviceName } = useEMGConnection();
+  const setServerUrl = useCallback(async (_url: string) => {}, []);
+  const setDeviceName = useCallback(async (_name: string) => {}, []);
   const [state, dispatch] = useReducer(reducer, initialState);
   const { serverUrl, deviceName, ttsRate, autoSpeak, saving, hasCalibration } =
     state;
