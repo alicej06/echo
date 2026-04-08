@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { Nav } from "@/components/nav";
+import { BottomNav } from "@/components/bottom-nav";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -10,23 +10,16 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "MAIA — ASL Communication",
-  description: "Real-time ASL translation powered by EMG and AI",
+  title: "echo — Bridging Communication",
+  description: "AI-powered ASL translation wristband — real-time sign language detection and conversion",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`dark ${inter.variable}`}>
-      <body
-        className="antialiased min-h-screen"
-        style={{ backgroundColor: "#0a0a0a" }}
-      >
-        <Nav />
+    <html lang="en" className={inter.variable}>
+      <body className="antialiased" style={{ backgroundColor: "#F0EFF8", minHeight: "100vh" }}>
         {children}
+        <BottomNav />
       </body>
     </html>
   );
