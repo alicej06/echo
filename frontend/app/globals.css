@@ -2,104 +2,59 @@
 
 @theme {
   --font-sans: "Inter", sans-serif;
-  --color-background: #0a0a0a;
-  --color-surface: #111111;
-  --color-border: #1f1f1f;
-  --color-muted: #71717a;
-  --color-accent: #06b6d4;
-  --color-accent-dim: #0891b2;
+  --color-background: #F0EFF8;
+  --color-surface: #FFFFFF;
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-muted: #8E8E93;
+  --color-accent: #7C6FE0;
+  --color-accent-dim: #6A5FCC;
 }
 
 html {
-  background-color: #0a0a0a;
-  color-scheme: dark;
+  background-color: #F0EFF8;
+  color-scheme: light;
 }
 
 body {
-  background-color: #0a0a0a;
-  color: #f4f4f5;
+  background-color: #F0EFF8;
+  color: #1C1C1E;
   font-family: "Inter", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #111;
-}
-::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #444;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 2px; }
+
+/* Range inputs */
+input[type=range] { accent-color: #7C6FE0; }
 
 /* Letter pop animation */
 @keyframes letter-pop {
-  0% {
-    transform: scale(0.7) translateY(8px);
-    opacity: 0;
-  }
-  60% {
-    transform: scale(1.08) translateY(-2px);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1) translateY(0);
-    opacity: 1;
-  }
+  0% { transform: scale(0.7) translateY(8px); opacity: 0; }
+  60% { transform: scale(1.08) translateY(-2px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
 }
-.letter-pop {
-  animation: letter-pop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
+.letter-pop { animation: letter-pop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 
-/* Pulse ring */
-@keyframes pulse-ring {
-  0% {
-    transform: scale(1);
-    opacity: 0.5;
-  }
-  70% {
-    transform: scale(1.35);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 0;
-  }
-}
-.pulse-ring {
-  animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
-}
+/* EMG bar animations */
+@keyframes bar1 { 0%,100%{height:20%} 50%{height:70%} }
+@keyframes bar2 { 0%,100%{height:40%} 50%{height:90%} }
+@keyframes bar3 { 0%,100%{height:60%} 50%{height:30%} }
+@keyframes bar4 { 0%,100%{height:30%} 50%{height:80%} }
+@keyframes bar5 { 0%,100%{height:50%} 50%{height:20%} }
 
-/* Reveal on scroll */
-.reveal {
-  opacity: 0;
-  transform: translateY(24px);
-  transition:
-    opacity 0.65s cubic-bezier(0.16, 1, 0.3, 1),
-    transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.reveal.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
+.emg-bar-1 { animation: bar1 0.8s ease-in-out infinite; }
+.emg-bar-2 { animation: bar2 0.6s ease-in-out infinite 0.1s; }
+.emg-bar-3 { animation: bar3 0.9s ease-in-out infinite 0.2s; }
+.emg-bar-4 { animation: bar4 0.7s ease-in-out infinite 0.15s; }
+.emg-bar-5 { animation: bar5 1.0s ease-in-out infinite 0.05s; }
 
-/* Connection status dot */
+/* Blink */
 @keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
-.blink {
-  animation: blink 1.2s ease-in-out infinite;
-}
+.blink { animation: blink 1.2s ease-in-out infinite; }

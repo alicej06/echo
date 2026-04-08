@@ -1,339 +1,273 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Bluetooth, Cpu, Volume2, SlidersHorizontal, Save } from "lucide-react";
+import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate } from "lucide-react";
+
+const BG = "#F0EFF8";
+const CARD = "#FFFFFF";
+const PURPLE = "#7C6FE0";
+const PURPLE_LIGHT = "rgba(124,111,224,0.12)";
+const GREEN = "#34C759";
+const TEXT = "#1C1C1E";
+const TEXT2 = "#6C6C70";
+const TEXT3 = "#8E8E93";
+const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
 
 interface Prefs {
   voiceRate: number;
+  volume: number;
+  vibration: boolean;
+  vibrationIntensity: number;
   confidenceThreshold: number;
   debounceMsWindow: number;
   modelFile: string;
+  selectedVoice: string;
 }
 
 const DEFAULT_PREFS: Prefs = {
   voiceRate: 1.0,
+  volume: 80,
+  vibration: true,
+  vibrationIntensity: 70,
   confidenceThreshold: 0.65,
   debounceMsWindow: 300,
   modelFile: "models/lstm_asl.pt",
+  selectedVoice: "Samantha",
 };
+
+const VOICES = [
+  { name: "Samantha", desc: "Natural, friendly" },
+  { name: "Karen", desc: "Clear, professional" },
+  { name: "Alex", desc: "Calm, neutral" },
+];
+
+function SectionLabel({ label }: { label: string }) {
+  return (
+    <p className="text-xs font-semibold uppercase tracking-wider mb-3 mt-6" style={{ color: TEXT3 }}>
+      {label}
+    </p>
+  );
+}
+
+function SliderRow({
+  label, value, min, max, unit, onChange,
+}: {
+  label: string; value: number; min: number; max: number; unit: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="mb-4">
+      <div className="flex justify-between mb-2">
+        <span className="text-sm" style={{ color: TEXT2 }}>{label}</span>
+        <span className="text-sm font-medium" style={{ color: TEXT }}>{value}{unit}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full"
+      />
+    </div>
+  );
+}
 
 export default function ProfilePage() {
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
-  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem("maia_prefs");
-      if (raw)
-        setPrefs({ ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) });
-    } catch {
-      // ignore
-    }
+      if (raw) setPrefs({ ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) });
+    } catch { /* ignore */ }
   }, []);
 
-  const save = () => {
-    localStorage.setItem("maia_prefs", JSON.stringify(prefs));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
   const update = <K extends keyof Prefs>(key: K, value: Prefs[K]) => {
-    setPrefs((p) => ({ ...p, [key]: value }));
-    setSaved(false);
+    setPrefs((p) => {
+      const next = { ...p, [key]: value };
+      localStorage.setItem("maia_prefs", JSON.stringify(next));
+      return next;
+    });
   };
-
-  const VOICE_OPTIONS: { label: string; value: number }[] = [
-    { label: "Default (1x)", value: 1.0 },
-    { label: "Slower (0.8x)", value: 0.8 },
-    { label: "Faster (1.2x)", value: 1.2 },
-  ];
 
   return (
-    <main
-      className="min-h-screen pt-16 pb-20 px-4"
-      style={{ backgroundColor: "#0a0a0a" }}
-    >
-      <div className="max-w-2xl mx-auto">
-        <div className="py-8">
-          <h1 className="text-2xl font-bold text-white tracking-tight">
-            Profile
-          </h1>
-          <p className="text-sm mt-1" style={{ color: "#52525b" }}>
-            Device and recognition preferences
-          </p>
+    <main className="min-h-screen pb-24 px-4" style={{ backgroundColor: BG }}>
+      <div className="max-w-sm mx-auto pt-12">
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: PURPLE_LIGHT }}>
+            <User size={22} style={{ color: PURPLE }} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold" style={{ color: TEXT }}>Settings</h1>
+            <p className="text-sm" style={{ color: TEXT2 }}>Customize your experience</p>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-4">
-          {/* Device */}
-          <div
-            className="rounded-2xl p-6"
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}
-          >
-            <div className="flex items-center gap-2 mb-5">
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ background: "rgba(6,182,212,0.1)" }}
-              >
-                <Bluetooth className="w-4 h-4" style={{ color: "#22d3ee" }} />
+        {/* DEVICE */}
+        <SectionLabel label="Device" />
+        <div className="flex flex-col gap-3">
+          {/* Wristband card */}
+          <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: PURPLE_LIGHT }}>
+                <Watch size={18} style={{ color: PURPLE }} />
               </div>
-              <h2 className="text-sm font-semibold text-white">Device</h2>
-            </div>
-
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-white">Myo Armband</p>
-                  <p className="text-xs mt-0.5" style={{ color: "#52525b" }}>
-                    BLE via dl-myo, no dongle required
-                  </p>
-                </div>
-                <span
-                  className="text-xs px-2.5 py-1 rounded-full font-medium"
-                  style={{
-                    background: "rgba(255,255,255,0.06)",
-                    color: "#71717a",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                  }}
-                >
-                  Not paired
-                </span>
-              </div>
-
-              <div>
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: "#52525b" }}
-                >
-                  Model file path
-                </label>
-                <input
-                  type="text"
-                  value={prefs.modelFile}
-                  onChange={(e) => update("modelFile", e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl text-sm font-mono outline-none transition-all duration-200"
-                  style={{
-                    backgroundColor: "rgba(255,255,255,0.05)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    color: "#a1a1aa",
-                  }}
-                />
-              </div>
-
-              <div
-                className="rounded-xl p-3 text-xs font-mono"
-                style={{
-                  background: "rgba(0,0,0,0.4)",
-                  border: "1px solid rgba(255,255,255,0.06)",
-                  color: "#22c55e",
-                }}
-              >
-                <span style={{ color: "#52525b" }}>$ </span>
-                python calibrate_quick.py
-              </div>
-            </div>
-          </div>
-
-          {/* Voice */}
-          <div
-            className="rounded-2xl p-6"
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}
-          >
-            <div className="flex items-center gap-2 mb-5">
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ background: "rgba(6,182,212,0.1)" }}
-              >
-                <Volume2 className="w-4 h-4" style={{ color: "#22d3ee" }} />
-              </div>
-              <h2 className="text-sm font-semibold text-white">Voice output</h2>
-            </div>
-
-            <div className="flex gap-2 flex-wrap">
-              {VOICE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => update("voiceRate", opt.value)}
-                  className="px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer"
-                  style={
-                    prefs.voiceRate === opt.value
-                      ? {
-                          background: "rgba(6,182,212,0.15)",
-                          color: "#22d3ee",
-                          border: "1px solid rgba(6,182,212,0.25)",
-                        }
-                      : {
-                          background: "rgba(255,255,255,0.04)",
-                          color: "#71717a",
-                          border: "1px solid rgba(255,255,255,0.08)",
-                        }
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Recognition */}
-          <div
-            className="rounded-2xl p-6"
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}
-          >
-            <div className="flex items-center gap-2 mb-5">
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ background: "rgba(6,182,212,0.1)" }}
-              >
-                <SlidersHorizontal
-                  className="w-4 h-4"
-                  style={{ color: "#22d3ee" }}
-                />
-              </div>
-              <h2 className="text-sm font-semibold text-white">
-                Recognition tuning
-              </h2>
-            </div>
-
-            <div className="flex flex-col gap-6">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-white">
-                    Confidence threshold
-                  </label>
-                  <span
-                    className="text-sm font-mono"
-                    style={{ color: "#22d3ee" }}
-                  >
-                    {(prefs.confidenceThreshold * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={50}
-                  max={95}
-                  step={5}
-                  value={prefs.confidenceThreshold * 100}
-                  onChange={(e) =>
-                    update("confidenceThreshold", Number(e.target.value) / 100)
-                  }
-                  className="w-full cursor-pointer"
-                  style={{ accentColor: "#06b6d4" }}
-                  aria-label="Confidence threshold"
-                />
-                <div className="flex justify-between mt-1">
-                  <span className="text-xs" style={{ color: "#3f3f46" }}>
-                    50%
-                  </span>
-                  <span className="text-xs" style={{ color: "#3f3f46" }}>
-                    95%
-                  </span>
+              <div className="flex-1">
+                <p className="text-sm font-semibold" style={{ color: TEXT }}>echo Wristband</p>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: GREEN }} />
+                  <span className="text-xs" style={{ color: TEXT3 }}>Connected</span>
                 </div>
               </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-medium text-white">
-                    Debounce window
-                  </label>
-                  <span
-                    className="text-sm font-mono"
-                    style={{ color: "#22d3ee" }}
-                  >
-                    {prefs.debounceMsWindow}ms
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={100}
-                  max={600}
-                  step={50}
-                  value={prefs.debounceMsWindow}
-                  onChange={(e) =>
-                    update("debounceMsWindow", Number(e.target.value))
-                  }
-                  className="w-full cursor-pointer"
-                  style={{ accentColor: "#06b6d4" }}
-                  aria-label="Debounce window"
-                />
-                <div className="flex justify-between mt-1">
-                  <span className="text-xs" style={{ color: "#3f3f46" }}>
-                    100ms
-                  </span>
-                  <span className="text-xs" style={{ color: "#3f3f46" }}>
-                    600ms
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Model info */}
-          <div
-            className="rounded-2xl p-6"
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-            }}
-          >
-            <div className="flex items-center gap-2 mb-5">
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ background: "rgba(6,182,212,0.1)" }}
-              >
-                <Cpu className="w-4 h-4" style={{ color: "#22d3ee" }} />
-              </div>
-              <h2 className="text-sm font-semibold text-white">Classifier</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: "Architecture", value: "LSTM" },
-                { label: "Classes", value: "26 (A-Z)" },
-                { label: "Input shape", value: "(40, 8)" },
-                { label: "Sample rate", value: "200 Hz" },
-                { label: "Filter", value: "Butterworth 3rd order" },
-                { label: "Passband", value: "20-450 Hz" },
-              ].map((stat) => (
-                <div
-                  key={stat.label}
-                  className="px-3 py-2.5 rounded-xl"
-                  style={{
-                    background: "rgba(0,0,0,0.3)",
-                    border: "1px solid rgba(255,255,255,0.06)",
-                  }}
-                >
-                  <p className="text-xs mb-0.5" style={{ color: "#52525b" }}>
-                    {stat.label}
-                  </p>
-                  <p className="text-sm font-medium text-white">{stat.value}</p>
-                </div>
-              ))}
+              <div>
+                <p className="text-xs mb-0.5" style={{ color: TEXT3 }}>Battery</p>
+                <p className="text-sm font-semibold" style={{ color: TEXT }}>85%</p>
+              </div>
+              <div>
+                <p className="text-xs mb-0.5" style={{ color: TEXT3 }}>Firmware</p>
+                <p className="text-sm font-semibold" style={{ color: TEXT }}>v2.1.3</p>
+              </div>
             </div>
           </div>
 
-          <button
-            onClick={save}
-            className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-200 cursor-pointer"
-            style={
-              saved
-                ? {
-                    background: "rgba(34,197,94,0.15)",
-                    color: "#22c55e",
-                    border: "1px solid rgba(34,197,94,0.2)",
-                  }
-                : { background: "rgba(6,182,212,0.7)", color: "#fff" }
-            }
+          {/* Calibration */}
+          <div
+            className="rounded-2xl p-4 flex items-center gap-3"
+            style={{ backgroundColor: CARD, boxShadow: SHADOW }}
           >
-            <Save className="w-4 h-4" />
-            {saved ? "Saved" : "Save preferences"}
-          </button>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: PURPLE_LIGHT }}>
+              <SlidersHorizontal size={18} style={{ color: PURPLE }} />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold" style={{ color: TEXT }}>Calibration</p>
+              <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>Last calibrated 2 days ago</p>
+            </div>
+            <ChevronRight size={16} style={{ color: TEXT3 }} />
+          </div>
+        </div>
+
+        {/* VOICE */}
+        <SectionLabel label="Voice" />
+        <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
+          <p className="text-sm font-medium mb-3" style={{ color: TEXT }}>Select Voice</p>
+          <div className="flex flex-col gap-2 mb-4">
+            {VOICES.map(({ name, desc }) => (
+              <button
+                key={name}
+                onClick={() => update("selectedVoice", name)}
+                className="flex items-center justify-between p-3 rounded-xl cursor-pointer text-left"
+                style={{
+                  border: prefs.selectedVoice === name
+                    ? `2px solid ${PURPLE}`
+                    : "1px solid rgba(0,0,0,0.08)",
+                  backgroundColor: prefs.selectedVoice === name ? PURPLE_LIGHT : "transparent",
+                }}
+              >
+                <div>
+                  <p className="text-sm font-medium" style={{ color: TEXT }}>{name}</p>
+                  <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{desc}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <SliderRow
+            label="Speed"
+            value={Math.round(prefs.voiceRate * 100)}
+            min={60}
+            max={150}
+            unit="x"
+            onChange={(v) => update("voiceRate", v / 100)}
+          />
+          <SliderRow
+            label="Volume"
+            value={prefs.volume}
+            min={0}
+            max={100}
+            unit="%"
+            onChange={(v) => update("volume", v)}
+          />
+        </div>
+
+        {/* HAPTICS */}
+        <SectionLabel label="Haptics" />
+        <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: PURPLE_LIGHT }}>
+              <Vibrate size={18} style={{ color: PURPLE }} />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold" style={{ color: TEXT }}>Vibration Feedback</p>
+              <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>Feel confirmation haptics</p>
+            </div>
+            {/* Toggle */}
+            <button
+              onClick={() => update("vibration", !prefs.vibration)}
+              className="relative cursor-pointer flex-shrink-0"
+              style={{
+                width: 51,
+                height: 31,
+                borderRadius: 15.5,
+                backgroundColor: prefs.vibration ? PURPLE : "#E5E5EA",
+                transition: "background-color 0.2s",
+                border: "none",
+                padding: 0,
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  left: prefs.vibration ? 22 : 2,
+                  width: 27,
+                  height: 27,
+                  borderRadius: "50%",
+                  backgroundColor: "#fff",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                  transition: "left 0.2s",
+                }}
+              />
+            </button>
+          </div>
+
+          {prefs.vibration && (
+            <SliderRow
+              label="Intensity"
+              value={prefs.vibrationIntensity}
+              min={0}
+              max={100}
+              unit="%"
+              onChange={(v) => update("vibrationIntensity", v)}
+            />
+          )}
+        </div>
+
+        {/* MORE */}
+        <SectionLabel label="More" />
+        <div className="rounded-2xl overflow-hidden" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
+          {[
+            { icon: Shield, label: "Privacy", sub: "Manage your data" },
+            { icon: HelpCircle, label: "Help & Support", sub: "FAQs and contact" },
+            { icon: Info, label: "About", sub: "Version 1.0.0" },
+          ].map(({ icon: Icon, label, sub }, i, arr) => (
+            <div
+              key={label}
+              className="flex items-center gap-3 px-4 py-4 cursor-pointer"
+              style={{
+                borderBottom: i < arr.length - 1 ? "1px solid rgba(0,0,0,0.06)" : "none",
+              }}
+            >
+              <Icon size={18} style={{ color: TEXT3 }} />
+              <div className="flex-1">
+                <p className="text-sm font-medium" style={{ color: TEXT }}>{label}</p>
+                <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{sub}</p>
+              </div>
+              <ChevronRight size={16} style={{ color: TEXT3 }} />
+            </div>
+          ))}
         </div>
       </div>
     </main>

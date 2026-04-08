@@ -1,7 +1,19 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Mic, MicOff, Radio, Play, StopCircle } from "lucide-react";
+import { Mic, Square } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
+
+const BG = "#F0EFF8";
+const CARD = "#FFFFFF";
+const PURPLE = "#7C6FE0";
+const PURPLE_LIGHT = "rgba(124,111,224,0.12)";
+const TEXT = "#1C1C1E";
+const TEXT2 = "#6C6C70";
+const TEXT3 = "#8E8E93";
+const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+
+type Mode = "two-way" | "asl-speech" | "speech-text";
+
 interface Message {
   id: string;
   side: "asl" | "speech";
@@ -14,29 +26,31 @@ function fmt(d: Date) {
 }
 
 export default function ConversationPage() {
-  const { status, sentence, letterStream, connect, disconnect, startDemo } =
-    useMyoWs();
+  const { status, sentence, letterStream, connect, disconnect, startDemo } = useMyoWs();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [wsUrl] = useState("ws://localhost:8765");
   const [isListening, setIsListening] = useState(false);
+  const [mode, setMode] = useState<Mode>("two-way");
   const prevSentenceRef = useRef("");
   const recognizerRef = useRef<SpeechRecognition | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const isActive = status === "connected" || status === "demo";
 
-  // Push ASL sentence to chat
+  // Auto-start demo when page loads
+  useEffect(() => {
+    if (status === "disconnected") {
+      startDemo();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Push ASL sentence as right-side message
   useEffect(() => {
     if (!sentence || sentence === prevSentenceRef.current) return;
     prevSentenceRef.current = sentence;
     setMessages((m) => [
       ...m,
-      {
-        id: Date.now().toString(),
-        side: "asl",
-        text: sentence,
-        timestamp: fmt(new Date()),
-      },
+      { id: Date.now().toString(), side: "asl", text: sentence, timestamp: fmt(new Date()) },
     ]);
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
@@ -52,29 +66,21 @@ export default function ConversationPage() {
   }, [messages.length]);
 
   const startListening = useCallback(() => {
-    const SpeechRecognitionCtor =
-      typeof window !== "undefined"
-        ? (window.SpeechRecognition ?? window.webkitSpeechRecognition)
-        : null;
-    if (!SpeechRecognitionCtor) return;
-
-    const rec = new SpeechRecognitionCtor();
+    const Ctor = typeof window !== "undefined"
+      ? (window.SpeechRecognition ?? window.webkitSpeechRecognition)
+      : null;
+    if (!Ctor) return;
+    const rec = new Ctor();
     rec.continuous = false;
     rec.interimResults = false;
     rec.lang = "en-US";
     recognizerRef.current = rec;
-
     rec.onresult = (ev: SpeechRecognitionEvent) => {
-      const transcript = ev.results[ev.resultIndex]?.[0]?.transcript ?? "";
-      if (transcript.trim()) {
+      const text = ev.results[ev.resultIndex]?.[0]?.transcript ?? "";
+      if (text.trim()) {
         setMessages((m) => [
           ...m,
-          {
-            id: Date.now().toString(),
-            side: "speech",
-            text: transcript.trim(),
-            timestamp: fmt(new Date()),
-          },
+          { id: Date.now().toString(), side: "speech", text: text.trim(), timestamp: fmt(new Date()) },
         ]);
       }
     };
@@ -88,228 +94,171 @@ export default function ConversationPage() {
     setIsListening(false);
   }, []);
 
-  const statusColor = {
-    disconnected: "#52525b",
-    connecting: "#eab308",
-    connected: "#22c55e",
-    demo: "#06b6d4",
-  }[status];
+  const MODES: { key: Mode; label: string }[] = [
+    { key: "two-way", label: "Two-Way" },
+    { key: "asl-speech", label: "ASL → Speech" },
+    { key: "speech-text", label: "Speech → Text" },
+  ];
 
   return (
-    <main
-      className="min-h-screen pt-16 flex flex-col"
-      style={{ backgroundColor: "#0a0a0a" }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-5 max-w-3xl mx-auto w-full">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
-            Conversation
-          </h1>
-          <p className="text-sm mt-0.5" style={{ color: "#52525b" }}>
-            ASL signing meets spoken reply
-          </p>
+    <main className="min-h-screen flex flex-col pb-20" style={{ backgroundColor: BG }}>
+      <div className="max-w-sm mx-auto w-full flex flex-col flex-1 pt-12 px-4">
+        {/* Header */}
+        <div className="mb-5">
+          <h1 className="text-2xl font-bold" style={{ color: TEXT }}>Conversation</h1>
+          <p className="text-sm mt-1" style={{ color: TEXT2 }}>Two-way communication mode</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span
-            className="w-2 h-2 rounded-full"
-            style={{ backgroundColor: statusColor }}
-          />
-          <span className="text-sm capitalize" style={{ color: statusColor }}>
-            {status}
-          </span>
-        </div>
-      </div>
 
-      {/* Chat area */}
-      <div className="flex-1 overflow-y-auto px-4 pb-4 max-w-3xl mx-auto w-full">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 gap-3">
-            <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center"
-              style={{ background: "rgba(255,255,255,0.04)" }}
+        {/* Mode tabs */}
+        <div className="flex gap-2 mb-5 overflow-x-auto pb-1" style={{ scrollbarWidth: "none" }}>
+          {MODES.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setMode(key)}
+              className="flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium cursor-pointer"
+              style={
+                mode === key
+                  ? { backgroundColor: PURPLE, color: "#fff" }
+                  : { backgroundColor: CARD, color: TEXT3, border: "1px solid rgba(0,0,0,0.08)" }
+              }
             >
-              <Radio className="w-6 h-6" style={{ color: "#3f3f46" }} />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Chat area */}
+        <div className="flex-1 overflow-y-auto mb-4" style={{ minHeight: 200 }}>
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 gap-3">
+              <p className="text-sm text-center max-w-xs" style={{ color: TEXT3 }}>
+                Start signing and your partner can reply by holding the mic button.
+              </p>
             </div>
-            <p
-              className="text-sm text-center max-w-xs"
-              style={{ color: "#3f3f46" }}
-            >
-              Connect Myo and start signing. Your partner can respond by holding
-              the mic button.
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3 py-4">
-            {messages.map((msg) => {
-              const isAsl = msg.side === "asl";
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex ${isAsl ? "justify-start" : "justify-end"} gap-2`}
-                >
-                  {isAsl && (
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1 text-xs font-bold"
-                      style={{
-                        background: "rgba(6,182,212,0.2)",
-                        color: "#22d3ee",
-                      }}
-                    >
-                      M
+          ) : (
+            <div className="flex flex-col gap-3 py-2">
+              {messages.map((msg) => {
+                const isAsl = msg.side === "asl";
+                return (
+                  <div key={msg.id} className={`flex ${isAsl ? "justify-end" : "justify-start"} gap-2`}>
+                    {!isAsl && (
+                      <div
+                        className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-1"
+                        style={{ backgroundColor: "rgba(0,0,0,0.06)" }}
+                      >
+                        <Mic size={13} style={{ color: TEXT3 }} />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1 max-w-[75%]">
+                      <p
+                        className="text-xs font-medium"
+                        style={{ color: TEXT3, textAlign: isAsl ? "right" : "left" }}
+                      >
+                        {isAsl ? "🤚 ASL User" : "Hearing User"}
+                      </p>
+                      <div
+                        className="px-4 py-3 text-sm leading-relaxed"
+                        style={
+                          isAsl
+                            ? {
+                                backgroundColor: PURPLE,
+                                color: "#fff",
+                                borderRadius: "18px 18px 4px 18px",
+                              }
+                            : {
+                                backgroundColor: CARD,
+                                color: TEXT,
+                                borderRadius: "18px 18px 18px 4px",
+                                boxShadow: SHADOW,
+                              }
+                        }
+                      >
+                        {msg.text}
+                      </div>
+                      <span
+                        className="text-xs px-1"
+                        style={{ color: TEXT3, textAlign: isAsl ? "right" : "left" }}
+                      >
+                        {msg.timestamp}
+                      </span>
                     </div>
-                  )}
-                  <div className="flex flex-col gap-1 max-w-xs md:max-w-sm">
-                    <div
-                      className="px-4 py-2.5 rounded-2xl text-sm leading-relaxed"
-                      style={
-                        isAsl
-                          ? {
-                              backgroundColor: "rgba(6,182,212,0.15)",
-                              color: "#e4e4e7",
-                              borderRadius: "4px 18px 18px 18px",
-                              border: "1px solid rgba(6,182,212,0.2)",
-                            }
-                          : {
-                              backgroundColor: "#6d28d9",
-                              color: "#ffffff",
-                              borderRadius: "18px 4px 18px 18px",
-                            }
-                      }
-                    >
-                      {msg.text}
-                    </div>
-                    <span
-                      className={`text-xs px-1 ${isAsl ? "text-left" : "text-right"}`}
-                      style={{ color: "#3f3f46" }}
-                    >
-                      {msg.timestamp}
-                    </span>
+                    {isAsl && (
+                      <div
+                        className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-6"
+                        style={{ backgroundColor: PURPLE_LIGHT }}
+                      >
+                        <span style={{ fontSize: 12 }}>🤚</span>
+                      </div>
+                    )}
                   </div>
-                  {!isAsl && (
-                    <div
-                      className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1 text-xs font-bold"
-                      style={{
-                        background: "rgba(109,40,217,0.2)",
-                        color: "#a78bfa",
-                      }}
-                    >
-                      Y
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            <div ref={bottomRef} />
-          </div>
-        )}
-      </div>
+                );
+              })}
+              <div ref={bottomRef} />
+            </div>
+          )}
+        </div>
 
-      {/* Active letter strip */}
-      {isActive && letterStream.length > 0 && (
-        <div className="px-4 pb-2 max-w-3xl mx-auto w-full">
+        {/* Active letter strip */}
+        {isActive && letterStream.length > 0 && mode !== "speech-text" && (
           <div
-            className="rounded-xl px-3 py-2 flex gap-1 overflow-hidden"
-            style={{
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,255,255,0.06)",
-            }}
+            className="rounded-xl px-3 py-2 mb-3 flex gap-1 overflow-hidden"
+            style={{ backgroundColor: CARD, boxShadow: SHADOW }}
           >
-            {letterStream.slice(-20).map((l, i, arr) => (
+            {letterStream.slice(-24).map((l, i, arr) => (
               <span
                 key={i}
                 className="text-xs font-bold w-5 h-5 flex items-center justify-center rounded"
                 style={{
-                  color: i === arr.length - 1 ? "#22d3ee" : "#3f3f46",
-                  backgroundColor:
-                    i === arr.length - 1
-                      ? "rgba(6,182,212,0.15)"
-                      : "transparent",
+                  color: i === arr.length - 1 ? PURPLE : TEXT3,
+                  backgroundColor: i === arr.length - 1 ? PURPLE_LIGHT : "transparent",
                 }}
               >
                 {l}
               </span>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Controls */}
-      <div
-        className="border-t px-4 py-4 max-w-3xl mx-auto w-full"
-        style={{ borderColor: "rgba(255,255,255,0.07)" }}
-      >
-        <div className="flex items-center gap-3">
-          {/* Connection */}
-          {!isActive ? (
-            <>
-              <button
-                onClick={() => connect(wsUrl)}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all duration-200 cursor-pointer"
-                style={{ background: "rgba(6,182,212,0.7)" }}
-              >
-                <Radio className="w-4 h-4" />
-                Connect
-              </button>
-              <button
-                onClick={startDemo}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  color: "#a1a1aa",
-                }}
-              >
-                <Play className="w-4 h-4" />
-                Demo
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={disconnect}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 cursor-pointer"
-              style={{
-                background: "rgba(239,68,68,0.1)",
-                border: "1px solid rgba(239,68,68,0.2)",
-                color: "#f87171",
-              }}
-            >
-              <StopCircle className="w-4 h-4" />
-              Disconnect
-            </button>
-          )}
-
-          {/* Mic hold-to-speak */}
+        {/* Mic button (speech → text) */}
+        {mode !== "asl-speech" && (
           <button
             onMouseDown={startListening}
             onMouseUp={stopListening}
             onTouchStart={startListening}
             onTouchEnd={stopListening}
-            className="ml-auto flex items-center gap-2 px-5 py-2.5 rounded-xl font-medium text-sm transition-all duration-200 cursor-pointer select-none"
-            style={
-              isListening
-                ? {
-                    background: "rgba(109,40,217,0.7)",
-                    color: "#fff",
-                    border: "1px solid rgba(109,40,217,0.5)",
-                    boxShadow: "0 0 20px rgba(109,40,217,0.3)",
-                  }
-                : {
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    color: "#a1a1aa",
-                  }
-            }
-            aria-label="Hold to speak"
+            className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold mb-3 cursor-pointer select-none"
+            style={{
+              backgroundColor: isListening ? PURPLE : CARD,
+              color: isListening ? "#fff" : TEXT2,
+              boxShadow: SHADOW,
+              fontSize: 15,
+              border: isListening ? "none" : "1px solid rgba(0,0,0,0.06)",
+            }}
           >
-            {isListening ? (
-              <Mic className="w-4 h-4" />
-            ) : (
-              <MicOff className="w-4 h-4" />
-            )}
-            {isListening ? "Listening..." : "Hold to speak"}
+            <Mic size={18} />
+            {isListening ? "Listening..." : "Hold to Speak"}
           </button>
-        </div>
+        )}
+
+        {/* End / Start */}
+        {isActive ? (
+          <button
+            onClick={disconnect}
+            className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold cursor-pointer"
+            style={{ backgroundColor: "#FF3B30", color: "#fff", fontSize: 15 }}
+          >
+            <Square size={16} fill="white" />
+            End Conversation
+          </button>
+        ) : (
+          <button
+            onClick={() => connect("ws://localhost:8765")}
+            className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold cursor-pointer"
+            style={{ backgroundColor: PURPLE, color: "#fff", fontSize: 15 }}
+          >
+            Start Conversation
+          </button>
+        )}
       </div>
     </main>
   );
