@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import concurrent.futures
 import json
 import os
 import sys
@@ -135,16 +136,21 @@ _ws_message_handler = None
 
 async def _ws_server_handler(websocket) -> None:
     _ws_clients.add(websocket)
+    print(f"  [ws]  client connected  ({len(_ws_clients)} total)")
     try:
         async for raw in websocket:
-            if _ws_message_handler:
-                try:
-                    msg = json.loads(raw)
-                    await _ws_message_handler(msg)
-                except Exception:
-                    pass
+            print(f"  [ws]  received: {raw[:120]}")
+            if not _ws_message_handler:
+                print(f"  [ws]  WARNING: no message handler set")
+                continue
+            try:
+                msg = json.loads(raw)
+                await _ws_message_handler(msg)
+            except Exception as exc:
+                print(f"  [ws]  handler error: {exc}")
     finally:
         _ws_clients.discard(websocket)
+        print(f"  [ws]  client disconnected  ({len(_ws_clients)} remaining)")
 
 
 async def _start_ws_server(port: int) -> None:
@@ -153,9 +159,9 @@ async def _start_ws_server(port: int) -> None:
     except ImportError:
         print(f"  {clr('[ws]', YELLOW)}  websockets not installed — pip install websockets")
         return
-    server = await websockets.serve(_ws_server_handler, "0.0.0.0", port)
-    print(f"  {clr('ws', CYAN)}  broadcast server → ws://localhost:{port}")
-    await server.wait_closed()
+    async with websockets.serve(_ws_server_handler, "0.0.0.0", port):
+        print(f"  {clr('ws', CYAN)}  broadcast server → ws://localhost:{port}")
+        await asyncio.Future()  # run forever
 
 # ---------------------------------------------------------------------------
 # BLE scanner
@@ -299,10 +305,10 @@ def _make_session(
     collect_buf: list  = []   # rows of 17 values being collected
 
     # Inference state
-    # emg_buf: rolling deque of 8-channel EMG rows (after bandpass)
-    # imu_buf: latest IMU row [qw,qx,qy, gx,gy,gz, ax,ay,az]
-    emg_buf   = collections.deque(maxlen=COLLECT_SAMPLES * 4)
-    imu_state = [np.zeros(9, dtype=np.float32)]  # last known IMU
+    # sync_buf: rolling deque of 17-column rows (EMG8 + IMU9), carry-forward per sample.
+    # This matches exactly how collect_buf is built during training.
+    sync_buf  = collections.deque(maxlen=COLLECT_SAMPLES * 4)
+    imu_state = [np.zeros(9, dtype=np.float32)]  # last known IMU (carry-forward)
     new_emg   = [0]
 
     letter_stream:  list[str] = []
@@ -319,16 +325,14 @@ def _make_session(
     last_emitted    = [None]   # last letter we actually emitted (require change to re-emit)
 
     def _build_sync_array() -> np.ndarray:
-        """Combine most recent COLLECT_SAMPLES EMG rows with latest IMU.
-        Returns (COLLECT_SAMPLES, 17) float32."""
-        emg = np.array(list(emg_buf)[-COLLECT_SAMPLES:], dtype=np.float32)
-        imu = np.tile(imu_state[0], (len(emg), 1))
-        return np.column_stack([emg, imu])
+        """Return last COLLECT_SAMPLES rows from sync_buf.
+        Each row already has (EMG8 + IMU9) captured at the right time, matching training."""
+        return np.array(list(sync_buf)[-COLLECT_SAMPLES:], dtype=np.float32)
 
     def _infer() -> None:
         if dyfav_model[0] is None:
             return
-        if len(emg_buf) < COLLECT_SAMPLES:
+        if len(sync_buf) < COLLECT_SAMPLES:
             return
 
         raw = _build_sync_array()
@@ -395,11 +399,20 @@ def _make_session(
                 await _ws_broadcast({"type": "error", "message": "Already recording"})
                 return
 
-            collecting[0]    = True
+            collecting[0]     = True
             collect_letter[0] = letter
             collect_buf.clear()
             mode[0] = f"collecting {letter.upper()}"
             print(f"\n  {clr('train', CYAN)}  collecting '{letter.upper()}'...")
+
+            # Watchdog: if EMG stops flowing (Myo drops), un-stick the UI after 5s
+            async def _collection_watchdog(ltr: str) -> None:
+                await asyncio.sleep(5.0)
+                if collecting[0] and collect_letter[0] == ltr:
+                    collecting[0] = False
+                    mode[0] = "recognition"
+                    await _ws_broadcast({"type": "error", "message": f"Recording timed out — is the Myo streaming?"})
+            asyncio.create_task(_collection_watchdog(letter))
 
         elif mtype == "train_model":
             # Client wants to train the model with collected recordings
@@ -412,11 +425,17 @@ def _make_session(
                 return
 
             print(f"\n  {clr('train', CYAN)}  training DyFAV for user '{user_id}'...")
-            model = train_from_recordings(recordings)
+            recs_snapshot = {k: list(v) for k, v in recordings.items()}
+
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                model = await loop.run_in_executor(
+                    pool, train_from_recordings, recs_snapshot
+                )
+
+            import joblib
             model["user_id"] = user_id
             dyfav_model[0] = model
-            # Save to disk
-            import joblib
             user_dir = MODELS_DIR / f"user_{user_id}"
             user_dir.mkdir(parents=True, exist_ok=True)
             joblib.dump(model, user_dir / "dyfav_model.pkl")
@@ -443,13 +462,13 @@ def _make_session(
         async def on_emg_data(self, emg: EMGData) -> None:
             for sample in (emg.sample1, emg.sample2):
                 row = np.array(list(sample), dtype=np.float32)
-                # Bandpass filter each sample via running state not possible sample-by-sample,
-                # so we just append and filter the window at inference time.
-                emg_buf.append(row)
+                # Combine EMG with carry-forward IMU and store in rolling buffer.
+                # sync_buf is used for both inference and training collection so
+                # the data format is identical in both cases.
+                full_row = np.concatenate([row, imu_state[0]])
+                sync_buf.append(full_row)
 
                 if collecting[0]:
-                    # Combine EMG with latest IMU to get 17-dim row
-                    full_row = np.concatenate([row, imu_state[0]])
                     collect_buf.append(full_row)
 
                     if len(collect_buf) >= COLLECT_SAMPLES:
@@ -570,6 +589,219 @@ def _make_session(
 # Entry point
 # ---------------------------------------------------------------------------
 
+async def _inspect(device_mac: str) -> None:
+    """
+    Stream raw Myo sensor values to the terminal so you can verify
+    channel ordering, scale, and orientation before training.
+
+    Prints one line per EMG packet:
+      EMG[0..7]  |  quat(w x y)  gyro(x y z)  accel(x y z)
+    """
+    from myo import MyoClient
+    from myo.types import EMGData, IMUData, EMGMode, IMUMode, ClassifierMode
+
+    imu_state = [np.zeros(9, dtype=np.float32)]
+    n = [0]
+
+    class InspectMyo(MyoClient):
+        async def on_emg_data(self, emg: EMGData) -> None:
+            n[0] += 1
+            if n[0] % 20 != 0:   # print ~10 lines/sec (200Hz / 20)
+                return
+            e = list(emg.sample1)
+            imu = imu_state[0]
+            emg_str   = "  ".join(f"{v:4d}" for v in e)
+            quat_str  = "  ".join(f"{v:7.4f}" for v in imu[0:3])
+            gyro_str  = "  ".join(f"{v:8.3f}" for v in imu[3:6])
+            accel_str = "  ".join(f"{v:8.3f}" for v in imu[6:9])
+            print(
+                f"EMG [{emg_str}]"
+                f"  |  quat [{quat_str}]"
+                f"  |  gyro [{gyro_str}]"
+                f"  |  accel [{accel_str}]"
+            )
+
+        async def on_imu_data(self, imu: IMUData) -> None:
+            try:
+                o = imu.orientation
+                g = imu.gyroscope
+                a = imu.accelerometer
+                imu_state[0] = np.array(
+                    [o.w, o.x, o.y, g[0], g[1], g[2], a[0], a[1], a[2]],
+                    dtype=np.float32,
+                )
+            except Exception:
+                pass
+
+        async def on_emg_data_aggregated(self, eds) -> None: pass
+        async def on_aggregated_data(self, ad) -> None: pass
+        async def on_fv_data(self, fvd) -> None: pass
+        async def on_motion_event(self, me) -> None: pass
+        async def on_classifier_event(self, ce) -> None: pass
+
+    print(clr("\n  Inspect mode — streaming raw Myo values (Ctrl+C to stop)\n", CYAN))
+    print("  EMG [0  1  2  3  4  5  6  7]"
+          "  |  quat [w       x       y      ]"
+          "  |  gyro [x         y         z       ]"
+          "  |  accel [x         y         z      ]")
+    print("  " + "-" * 110)
+
+    client = await InspectMyo.with_device(mac=device_mac or None)
+    await client.setup(
+        emg_mode=EMGMode.SEND_EMG,
+        imu_mode=IMUMode.SEND_ALL,
+        classifier_mode=ClassifierMode.DISABLED,
+    )
+    try:
+        await client.start()
+        while True:
+            await asyncio.sleep(1)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        await client.stop()
+        await client.disconnect()
+
+
+async def _train_terminal(
+    user_id: str,
+    device_mac: str,
+    reps: int = TRAIN_REPS_NEEDED,
+) -> None:
+    """
+    Terminal-only training mode.  No frontend or WebSocket needed.
+
+    For each of the 26 letters:
+      1. Print the ASL hint
+      2. Wait for Enter (user forms the gesture)
+      3. Record COLLECT_SAMPLES EMG+IMU samples
+      4. Repeat `reps` times
+    Then train and save the model.
+    """
+    from myo import MyoClient
+    from myo.types import EMGData, IMUData, EMGMode, IMUMode, ClassifierMode
+
+    print(clr(f"\n  Training mode — user '{user_id}'  ({reps} reps per letter)", BOLD))
+    print(clr("  Connect, then hold each pose when prompted and press Enter.\n", DIM))
+
+    emg_buf:  list = []
+    imu_state = [np.zeros(9, dtype=np.float32)]
+    collecting = [False]
+    collect_done = [False]
+
+    class TrainMyo(MyoClient):
+        async def on_emg_data(self, emg: EMGData) -> None:
+            if not collecting[0]:
+                return
+            for sample in (emg.sample1, emg.sample2):
+                row = np.array(list(sample), dtype=np.float32)
+                full_row = np.concatenate([row, imu_state[0]])
+                emg_buf.append(full_row)
+                if len(emg_buf) >= COLLECT_SAMPLES:
+                    collecting[0] = False
+                    collect_done[0] = True
+
+        async def on_imu_data(self, imu: IMUData) -> None:
+            try:
+                o = imu.orientation
+                g = imu.gyroscope
+                a = imu.accelerometer
+                imu_state[0] = np.array(
+                    [o.w, o.x, o.y, g[0], g[1], g[2], a[0], a[1], a[2]],
+                    dtype=np.float32,
+                )
+            except Exception:
+                pass
+
+        async def on_emg_data_aggregated(self, eds) -> None: pass
+        async def on_aggregated_data(self, ad) -> None: pass
+        async def on_fv_data(self, fvd) -> None: pass
+        async def on_motion_event(self, me) -> None: pass
+        async def on_classifier_event(self, ce) -> None: pass
+
+    print(clr("  Connecting to Myo...", CYAN))
+    client = await TrainMyo.with_device(mac=device_mac or None)
+    await client.setup(
+        emg_mode=EMGMode.SEND_EMG,
+        imu_mode=IMUMode.SEND_ALL,
+        classifier_mode=ClassifierMode.DISABLED,
+    )
+    print(clr("  Connected. Starting training.\n", GREEN))
+
+    HINTS = {
+        'a': "Fist, thumb to side",   'b': "Flat hand, thumb in",
+        'c': "Curved fingers+thumb",  'd': "Index up, others to thumb",
+        'e': "Fingers bent to palm",  'f': "Thumb+index touch, others spread",
+        'g': "Index+thumb sideways",  'h': "Index+middle sideways",
+        'i': "Pinky up from fist",    'j': "Pinky up, trace J",
+        'k': "Index+middle+thumb K",  'l': "Thumb+index right angle",
+        'm': "Three fingers over thumb", 'n': "Two fingers over thumb",
+        'o': "Fingers+thumb form O",  'p': "K-shape pointing down",
+        'q': "G-shape pointing down", 'r': "Index+middle crossed",
+        's': "Fist, thumb over fingers", 't': "Thumb between index+middle",
+        'u': "Index+middle together", 'v': "Index+middle spread (peace)",
+        'w': "Three fingers spread",  'x': "Index hooked",
+        'y': "Thumb+pinky spread",    'z': "Index traces Z",
+    }
+
+    recordings: dict[str, list[np.ndarray]] = {}
+    loop = asyncio.get_event_loop()
+
+    async def _ainput(prompt: str) -> str:
+        """Non-blocking input — runs in a thread so the event loop stays alive
+        and Myo BLE callbacks keep firing while we wait for Enter."""
+        return await loop.run_in_executor(None, input, prompt)
+
+    async def _record_one() -> np.ndarray:
+        """Countdown then capture COLLECT_SAMPLES rows from the live buffer."""
+        # 3-2-1 countdown: event loop stays alive, Myo keeps streaming
+        for countdown in (3, 2, 1):
+            print(f"\r    {clr(str(countdown), YELLOW)}...", end="", flush=True)
+            await asyncio.sleep(0.4)
+        print(f"\r    {clr('● REC', RED)}    ", end="", flush=True)
+
+        emg_buf.clear()
+        collecting[0]  = True
+        collect_done[0] = False
+        while not collect_done[0]:
+            await asyncio.sleep(0.005)
+        print(f"\r    {clr('✓ done', GREEN)}    ")
+        return np.array(emg_buf[:COLLECT_SAMPLES], dtype=np.float32)
+
+    client_task = asyncio.create_task(client.start())
+    # Let the Myo settle for a moment before training starts
+    await asyncio.sleep(1.0)
+
+    for letter in ALL_LETTERS:
+        hint = HINTS.get(letter, "")
+        print(f"\n  {clr(letter.upper(), BOLD + CYAN)}  {clr(hint, DIM)}")
+        for rep in range(1, reps + 1):
+            await _ainput(f"    Rep {rep}/{reps} — hold the pose, press Enter ")
+            raw = await _record_one()
+            recordings.setdefault(letter, []).append(raw)
+        print()
+
+    client_task.cancel()
+    try:
+        await client_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    await client.stop()
+    await client.disconnect()
+
+    print(clr("\n  Training DyFAV model...", CYAN))
+    import joblib, concurrent.futures
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        model = await loop.run_in_executor(pool, train_from_recordings, recordings)
+    model["user_id"] = user_id
+    user_dir = MODELS_DIR / f"user_{user_id}"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, user_dir / "dyfav_model.pkl")
+    print(clr(f"  Model saved → models/user_{user_id}/dyfav_model.pkl", GREEN))
+    print(clr("  Run without --train to start recognition.\n", DIM))
+
+
 async def main(args: argparse.Namespace) -> None:
     print()
     print(clr("  Echo  |  ASL Fingerspelling  |  DyFAV", BOLD))
@@ -578,6 +810,18 @@ async def main(args: argparse.Namespace) -> None:
 
     if args.scan:
         await scan_devices()
+        return
+
+    if args.inspect:
+        await _inspect(device_mac=args.device)
+        return
+
+    if args.train:
+        await _train_terminal(
+            user_id=args.user,
+            device_mac=args.device,
+            reps=args.train_reps,
+        )
         return
 
     ws_port = args.ws_port or 0
@@ -599,10 +843,14 @@ async def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Echo — live ASL translation from Myo armband")
-    parser.add_argument("--device",   default="",       help="Myo MAC address (optional; auto-discovers if omitted)")
-    parser.add_argument("--user",     default="default", help="User ID for model loading/saving")
-    parser.add_argument("--scan",     action="store_true", help="Scan for BLE devices and exit")
-    parser.add_argument("--no-llm",  action="store_true", help="Skip LLM sentence reconstruction")
-    parser.add_argument("--ws-port", type=int, default=8765, dest="ws_port",
+    parser.add_argument("--device",    default="",        help="Myo MAC address (optional; auto-discovers if omitted)")
+    parser.add_argument("--user",      default="default",  help="User ID for model loading/saving")
+    parser.add_argument("--scan",      action="store_true", help="Scan for BLE devices and exit")
+    parser.add_argument("--inspect",   action="store_true", help="Stream raw EMG+IMU values to terminal (for verifying sensor layout)")
+    parser.add_argument("--train",     action="store_true", help="Terminal training mode — record poses and build personal model")
+    parser.add_argument("--train-reps", type=int, default=TRAIN_REPS_NEEDED, dest="train_reps",
+                        help=f"Recordings per letter in --train mode (default: {TRAIN_REPS_NEEDED})")
+    parser.add_argument("--no-llm",   action="store_true", help="Skip LLM sentence reconstruction")
+    parser.add_argument("--ws-port",  type=int, default=8765, dest="ws_port",
                         help="WebSocket server port (default: 8765)")
     asyncio.run(main(parser.parse_args()))

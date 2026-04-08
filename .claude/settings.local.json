@@ -5,7 +5,11 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:api.github.com)",
       "Bash(curl -s \"https://raw.githubusercontent.com/prwlnght/DyFAV/master/dyFAV.py\")",
-      "Bash(curl -s \"https://raw.githubusercontent.com/prwlnght/DyFAV/master/dyFAV_Randomized.py\")"
+      "Bash(curl -s \"https://raw.githubusercontent.com/prwlnght/DyFAV/master/dyFAV_Randomized.py\")",
+      "WebFetch(domain:v0-sign-speak-app-prototype.vercel.app)",
+      "WebFetch(domain:v0.app)",
+      "Bash(npx expo:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
