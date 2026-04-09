@@ -62,6 +62,11 @@ from scripts.train_dyfav import (
     ALL_LETTERS, TOP_K, predict, predict_topk, FUZZY_THRESHOLD_DEFAULT,
     train_from_recordings, train_for_user, load_user_model,
 )
+from scripts.train_dtw import (
+    PHRASES, TRAIN_REPS as DTW_TRAIN_REPS,
+    predict_dtw, train_dtw, save_dtw_model, load_dtw_model,
+    save_phrase_recordings, load_phrase_recordings,
+)
 SAMPLE_RATE = 200   # Hz (Myo Armband EMG)
 DEBOUNCE_MS = 300
 
@@ -81,6 +86,15 @@ STABLE_FRAMES      = 6      # same letter must hold for this many consecutive fr
 LLM_PAUSE_S        = 1.8
 LLM_MIN_LETTERS    = 2
 TRAIN_REPS_NEEDED  = 5
+
+# --- DTW phrase segmentation ---
+DTW_RMS_WINDOW        = 20    # samples to compute windowed RMS over (~100ms at 200Hz)
+DTW_ONSET_RMS         = 18.0  # RMS threshold to START capturing a gesture
+DTW_OFFSET_RMS        = 12.0  # RMS threshold to END capture (must drop below this)
+DTW_MIN_QUIET         = 60    # consecutive quiet samples before gesture ends (300ms)
+DTW_MIN_GESTURE       = 40    # minimum gesture length in samples (200ms)
+DTW_MAX_GESTURE       = 1200  # maximum gesture buffer (6s)
+DTW_CONFIDENCE_THRESH = 0.20  # minimum confidence to emit a phrase
 
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 OLLAMA_API_KEY     = os.environ.get("OLLAMA_API_KEY", "")
@@ -129,14 +143,19 @@ async def _ws_broadcast(payload: dict) -> None:
     _ws_clients.difference_update(dead)
 
 
-# _ws_message_handler is set by _make_session so the WS server can route
-# incoming client messages to the session logic
+# _ws_message_handler / _ws_connect_handler are set by _make_session
 _ws_message_handler = None
+_ws_connect_handler = None
 
 
 async def _ws_server_handler(websocket) -> None:
     _ws_clients.add(websocket)
     print(f"  [ws]  client connected  ({len(_ws_clients)} total)")
+    if _ws_connect_handler:
+        try:
+            await _ws_connect_handler(websocket)
+        except Exception as exc:
+            print(f"  [ws]  connect handler error: {exc}")
     try:
         async for raw in websocket:
             print(f"  [ws]  received: {raw[:120]}")
@@ -288,14 +307,41 @@ def _make_session(
     use_llm: bool,
     ws_port: int = 0,
 ):
-    global _ws_message_handler
+    global _ws_message_handler, _ws_connect_handler
 
-    # Load user model (may be None if not yet trained)
-    dyfav_model = [load_user_model(user_id)]
-    if dyfav_model[0]:
-        print(f"  {clr('model', CYAN)}  loaded user model for '{user_id}'")
+    # DyFAV letter model — kept as None (words-only mode; WS train_model handler still references it)
+    dyfav_model = [None]
+
+    # Load DTW phrase model
+    dtw_model = [load_dtw_model(user_id)]
+    if dtw_model[0]:
+        phrases_loaded = dtw_model[0].get("phrases", [])
+        print(f"  {clr('dtw', CYAN)}  loaded phrase model ({len(phrases_loaded)} phrases) for '{user_id}'")
     else:
-        print(f"  {clr('model', YELLOW)}  no model for user '{user_id}' — use training mode first")
+        print(f"  {clr('dtw', YELLOW)}  no phrase model for '{user_id}' — run --train-words to build one")
+
+    # DTW phrase training recordings — load persisted recordings from disk
+    phrase_recordings: dict[str, list] = load_phrase_recordings(user_id)
+    if phrase_recordings:
+        total_recs = sum(len(v) for v in phrase_recordings.values())
+        print(f"  {clr('dtw', CYAN)}  loaded {total_recs} saved phrase recordings for '{user_id}'")
+
+    # DTW gesture segmentation state
+    seg_buf: list       = []
+    seg_quiet_count     = [0]
+    seg_active          = [False]
+    display_tick        = [0]   # rate-limit terminal status updates
+    ws_train_phrase     = [None]   # set while waiting for a training gesture via WS
+    ws_thinking         = [False]  # True while DTW inference is running
+
+    # Shared thread pool for DTW inference (avoid creating one per gesture)
+    _dtw_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    def _rms_emg(rows: list) -> float:
+        if len(rows) < 2:
+            return 0.0
+        arr = np.array(rows[-DTW_RMS_WINDOW:], dtype=np.float32)[:, :8]
+        return float(np.sqrt(np.mean(arr ** 2)))
 
     # Training state
     # recordings[letter] = list of (n_samples, 17) arrays
@@ -444,12 +490,105 @@ def _make_session(
             print(f"  {clr('train', GREEN)}  model saved → models/user_{user_id}/dyfav_model.pkl")
             await _ws_broadcast({"type": "model_ready", "user_id": user_id})
 
+        elif mtype == "train_phrase":
+            phrase = str(msg.get("phrase", "")).lower()
+            if phrase not in PHRASES:
+                await _ws_broadcast({"type": "error", "message": f"Unknown phrase: {phrase}"})
+                return
+            if ws_train_phrase[0] or collecting[0]:
+                await _ws_broadcast({"type": "error", "message": "Already recording"})
+                return
+            ws_train_phrase[0] = phrase
+            mode[0] = f"waiting: {phrase}"
+            print(f"\n  {clr('train', CYAN)}  ready — sign '{phrase}'  (gesture segmentation active)")
+
+            async def _phrase_watchdog(p: str) -> None:
+                await asyncio.sleep(12.0)
+                if ws_train_phrase[0] == p:
+                    ws_train_phrase[0] = None
+                    mode[0] = "recognition"
+                    await _ws_broadcast({"type": "error", "message": f"Phrase recording timed out — no gesture detected"})
+            asyncio.create_task(_phrase_watchdog(phrase))
+
+        elif mtype == "train_phrases_model":
+            # Merge in-memory recordings with any previously persisted ones
+            disk_recs = load_phrase_recordings(user_id)
+            merged: dict[str, list] = {**disk_recs}
+            for p, recs in phrase_recordings.items():
+                merged.setdefault(p, []).extend(recs)
+
+            missing = [p for p in PHRASES if len(merged.get(p, [])) < 3]
+            if missing:
+                await _ws_broadcast({
+                    "type": "error",
+                    "message": f"Need at least 3 recs each — missing: {missing[:3]}",
+                })
+                return
+            print(f"\n  {clr('train', CYAN)}  training DTW phrase model for '{user_id}'...")
+            loop = asyncio.get_event_loop()
+            model = await loop.run_in_executor(_dtw_executor, train_dtw, merged)
+            dtw_model[0] = model
+            save_dtw_model(model, user_id)
+            save_phrase_recordings(merged, user_id)
+            phrase_recordings.clear()
+            mode[0] = "recognition"
+            cv_acc = model.get("cv_acc")
+            acc_str = f"  CV acc: {cv_acc:.1%}" if cv_acc is not None else ""
+            print(f"  {clr('train', GREEN)}  phrase model saved for '{user_id}'{acc_str}")
+            await _ws_broadcast({
+                "type": "dtw_model_ready",
+                "user_id": user_id,
+                "cv_accuracy": round(cv_acc, 4) if cv_acc is not None else None,
+            })
+
         elif mtype == "correction":
-            # User corrected a misclassification — store for future retraining
             letter = str(msg.get("letter", "")).lower()
             print(f"\n  {clr('correction', YELLOW)}  user says: {letter.upper()}")
 
+    async def _run_dtw(raw_gesture: np.ndarray) -> None:
+        """Run DTW phrase inference in thread pool, broadcast result."""
+        ws_thinking[0] = True
+        if ws_port:
+            asyncio.create_task(_ws_broadcast({"type": "gesture_state", "state": "thinking"}))
+        loop = asyncio.get_event_loop()
+        phrase, confidence, scores = await loop.run_in_executor(
+            _dtw_executor,
+            lambda: predict_dtw(dtw_model[0], raw_gesture, return_scores=True),
+        )
+        ws_thinking[0] = False
+        if confidence < DTW_CONFIDENCE_THRESH:
+            print(f"\r  {clr('?', DIM)}  {phrase}  ({confidence:.0%}) — below threshold          \n",
+                  flush=True)
+            if ws_port:
+                await _ws_broadcast({"type": "gesture_state", "state": "idle", "rms": 0.0})
+            return
+        print(f"\r  {clr(phrase.upper(), BOLD + GREEN)}  ({confidence:.0%})          \n", flush=True)
+        if ws_port:
+            await _ws_broadcast({
+                "type":       "phrase",
+                "phrase":     phrase,
+                "confidence": round(confidence, 4),
+                "scores":     {p: round(d, 3) for p, d in scores.items()},
+            })
+
     _ws_message_handler = _handle_ws_message
+
+    async def _handle_ws_connect(websocket) -> None:
+        """Send current phrase training state and model status to a newly connected client."""
+        counts = {p: len(phrase_recordings.get(p, [])) for p in PHRASES}
+        await websocket.send(json.dumps({
+            "type": "phrase_train_status",
+            "counts": counts,
+        }))
+        if dtw_model[0]:
+            cv_acc = dtw_model[0].get("cv_acc")
+            await websocket.send(json.dumps({
+                "type": "dtw_model_ready",
+                "user_id": user_id,
+                "cv_accuracy": round(cv_acc, 4) if cv_acc is not None else None,
+            }))
+
+    _ws_connect_handler = _handle_ws_connect
 
     from myo import MyoClient
     from myo.types import (
@@ -472,26 +611,123 @@ def _make_session(
                     collect_buf.append(full_row)
 
                     if len(collect_buf) >= COLLECT_SAMPLES:
-                        # Recording complete
-                        raw = np.array(collect_buf[:COLLECT_SAMPLES], dtype=np.float32)
-                        letter = collect_letter[0]
-                        recordings.setdefault(letter, []).append(raw)
-                        count = len(recordings[letter])
+                        raw    = np.array(collect_buf[:COLLECT_SAMPLES], dtype=np.float32)
+                        key    = collect_letter[0]
                         collecting[0] = False
                         mode[0] = "recognition"
-                        print(f"  {clr('train', CYAN)}  '{letter.upper()}' recorded ({count}/{TRAIN_REPS_NEEDED})")
+
+                        # Letter training recording (phrase training uses gesture segmentation)
+                        recordings.setdefault(key, []).append(raw)
+                        count = len(recordings[key])
+                        print(f"  {clr('train', CYAN)}  '{key.upper()}' recorded ({count}/{TRAIN_REPS_NEEDED})")
                         if ws_port:
                             asyncio.create_task(_ws_broadcast({
                                 "type": "train_ack",
-                                "letter": letter,
+                                "letter": key,
                                 "count": count,
                                 "needed": TRAIN_REPS_NEEDED,
                             }))
 
+                # --- DTW gesture segmentation (runs continuously) ---
+                if not collecting[0]:
+                    rms = _rms_emg(seg_buf if seg_active[0] else list(sync_buf))
+
+                    if not seg_active[0]:
+                        if rms >= DTW_ONSET_RMS:
+                            seg_active[0]      = True
+                            seg_quiet_count[0] = 0
+                            seg_buf.clear()
+                            seg_buf.append(full_row)
+                            # New line so gesture progress doesn't overwrite idle bar
+                            print(f"\n  {clr('>>', BOLD + GREEN)}  gesture — signing...", flush=True)
+                    else:
+                        seg_buf.append(full_row)
+                        if rms < DTW_OFFSET_RMS:
+                            seg_quiet_count[0] += 1
+                        else:
+                            seg_quiet_count[0] = 0
+
+                        gesture_done = (
+                            seg_quiet_count[0] >= DTW_MIN_QUIET
+                            or len(seg_buf) >= DTW_MAX_GESTURE
+                        )
+                        if gesture_done:
+                            seg_active[0] = False
+                            if len(seg_buf) >= DTW_MIN_GESTURE:
+                                raw_g = np.array(seg_buf, dtype=np.float32)
+                                seg_buf.clear()
+                                if ws_train_phrase[0]:
+                                    # Save as phrase training recording
+                                    phrase = ws_train_phrase[0]
+                                    ws_train_phrase[0] = None
+                                    mode[0] = "recognition"
+                                    phrase_recordings.setdefault(phrase, []).append(raw_g)
+                                    save_phrase_recordings(phrase_recordings, user_id)
+                                    count = len(phrase_recordings[phrase])
+                                    print(f"\r  {clr('train', CYAN)}  '{phrase}' recorded ({count}/{DTW_TRAIN_REPS})          \n",
+                                          flush=True)
+                                    if ws_port:
+                                        asyncio.create_task(_ws_broadcast({
+                                            "type": "train_phrase_ack",
+                                            "phrase": phrase,
+                                            "count": count,
+                                            "needed": DTW_TRAIN_REPS,
+                                        }))
+                                elif dtw_model[0] is not None:
+                                    print(f"\r  {clr('..', CYAN)}  thinking...  ({len(raw_g)} frames)          ",
+                                          end="", flush=True)
+                                    asyncio.create_task(_run_dtw(raw_g))
+                                # else: no model and not training — ignore gesture
+                            else:
+                                # Too short — discard silently, return to idle bar
+                                seg_buf.clear()
+                                if ws_train_phrase[0]:
+                                    print(f"\r  {clr('train', YELLOW)}  gesture too short — sign again          ",
+                                          end="", flush=True)
+                                else:
+                                    print(f"\r  {clr('listening', DIM)}  (gesture too short, ignored)          ",
+                                          end="", flush=True)
+
+                # Rate-limited idle/capture status bar (~10 Hz)
+                display_tick[0] += 2
+                if display_tick[0] >= 20:
+                    display_tick[0] = 0
+                    rms_now = _rms_emg(list(sync_buf))
+                    if seg_active[0]:
+                        frames   = len(seg_buf)
+                        bar_fill = min(frames // 12, 20)
+                        bar      = clr("=" * bar_fill, GREEN) + clr("-" * (20 - bar_fill), DIM)
+                        print(f"\r  {clr('>>', BOLD + GREEN)}  [{bar}]  {frames} fr  RMS:{rms_now:5.1f}  ",
+                              end="", flush=True)
+                        if ws_port:
+                            asyncio.create_task(_ws_broadcast({
+                                "type": "gesture_state", "state": "capturing",
+                                "frames": frames, "rms": round(rms_now, 1),
+                            }))
+                    elif ws_thinking[0]:
+                        pass  # thinking broadcast already sent; don't spam
+                    elif ws_train_phrase[0]:
+                        thresh_fill = min(int(rms_now / DTW_ONSET_RMS * 12), 12)
+                        bar         = clr("|" * thresh_fill, CYAN) + clr("." * (12 - thresh_fill), DIM)
+                        print(f"\r  {clr('rec>', BOLD + CYAN)}  [{bar}]  sign: {ws_train_phrase[0]}  ",
+                              end="", flush=True)
+                        if ws_port:
+                            asyncio.create_task(_ws_broadcast({
+                                "type": "gesture_state", "state": "idle",
+                                "rms": round(rms_now, 1),
+                            }))
+                    elif dtw_model[0] is not None:
+                        thresh_fill = min(int(rms_now / DTW_ONSET_RMS * 12), 12)
+                        bar         = clr("|" * thresh_fill, YELLOW) + clr("." * (12 - thresh_fill), DIM)
+                        print(f"\r  {clr('listening', DIM)}  [{bar}]  RMS:{rms_now:5.1f}  ",
+                              end="", flush=True)
+                        if ws_port:
+                            asyncio.create_task(_ws_broadcast({
+                                "type": "gesture_state", "state": "idle",
+                                "rms": round(rms_now, 1),
+                            }))
+
             new_emg[0] += 2
-            if not collecting[0] and new_emg[0] >= INFER_HOP_SAMPLES:
-                new_emg[0] = 0
-                _infer()
 
         async def on_imu_data(self, imu: IMUData) -> None:
             # orientation: object with .w .x .y .z
@@ -559,15 +795,12 @@ def _make_session(
         )
         print(f"  {clr('myo', CYAN)}  EMG + IMU streaming enabled")
         print()
+        dtw_status = clr('loaded', GREEN) if dtw_model[0] else clr('NONE — run --train-words first', YELLOW)
         print(f"  {clr('Echo running', BOLD + GREEN)}"
               f"  |  user: {clr(user_id, CYAN)}"
-              f"  |  model: {clr('loaded' if dyfav_model[0] else 'NONE — train first', YELLOW if not dyfav_model[0] else GREEN)}")
-        if use_llm:
-            llm_name = "Claude Haiku" if ANTHROPIC_API_KEY else f"Ollama ({OLLAMA_LOCAL_MODEL})"
-            print(f"  {clr('LLM:', DIM)} {clr(llm_name, CYAN)}")
-        print(); print(); print(); print()
+              f"  |  phrase model: {dtw_status}")
+        print()
 
-        llm_task = asyncio.create_task(_llm_loop())
         try:
             await client.start()
             while True:
@@ -575,13 +808,10 @@ def _make_session(
         except (asyncio.CancelledError, KeyboardInterrupt):
             pass
         finally:
-            llm_task.cancel()
             await client.stop()
             await client.disconnect()
             if ws_port:
                 await _ws_broadcast({"type": "status", "connected": False, "device": device_mac or "Myo"})
-            print(f"\n\n  {clr('transcript', DIM)}: {' '.join(letter_stream)}")
-            print(f"  {clr('last echo', VIOLET)}: {sentence[0]}")
 
     return run
 
@@ -758,14 +988,14 @@ async def _train_terminal(
         for countdown in (3, 2, 1):
             print(f"\r    {clr(str(countdown), YELLOW)}...", end="", flush=True)
             await asyncio.sleep(0.4)
-        print(f"\r    {clr('● REC', RED)}    ", end="", flush=True)
+        print(f"\r    {clr('* REC', RED)}    ", end="", flush=True)
 
         emg_buf.clear()
         collecting[0]  = True
         collect_done[0] = False
         while not collect_done[0]:
             await asyncio.sleep(0.005)
-        print(f"\r    {clr('✓ done', GREEN)}    ")
+        print(f"\r    {clr('done', GREEN)}    ")
         return np.array(emg_buf[:COLLECT_SAMPLES], dtype=np.float32)
 
     client_task = asyncio.create_task(client.start())
@@ -802,10 +1032,178 @@ async def _train_terminal(
     print(clr("  Run without --train to start recognition.\n", DIM))
 
 
+async def _train_words_terminal(
+    user_id: str,
+    device_mac: str,
+    reps: int = DTW_TRAIN_REPS,
+) -> None:
+    """
+    Terminal training mode for DTW phrase recognition.
+    For each phrase: countdown, perform the sign, auto-detect end by RMS drop.
+    """
+    from myo import MyoClient
+    from myo.types import EMGData, IMUData, EMGMode, IMUMode, ClassifierMode
+
+    print(clr(f"\n  Phrase training — user '{user_id}'  ({reps} reps per phrase)", BOLD))
+    print(clr("  Perform each sign naturally. Recording stops automatically when\n"
+              "  your hand drops to rest. Press Enter to start each rep.\n", DIM))
+
+    imu_state     = [np.zeros(9, dtype=np.float32)]
+    gesture_buf: list  = []
+    recent_buf:  list  = []   # rolling window used for onset detection
+    waiting_onset = [False]   # True = watching for RMS spike to start gesture_buf
+    recording     = [False]   # True = gesture_buf is filling
+    quiet_count   = [0]
+    done          = [False]
+
+    class WordsMyo(MyoClient):
+        async def on_emg_data(self, emg: EMGData) -> None:
+            for sample in (emg.sample1, emg.sample2):
+                row      = np.array(list(sample), dtype=np.float32)
+                full_row = np.concatenate([row, imu_state[0]])
+
+                # --- Phase 1: wait for onset (same threshold as live inference) ---
+                if waiting_onset[0]:
+                    recent_buf.append(full_row)
+                    if len(recent_buf) > DTW_RMS_WINDOW:
+                        recent_buf.pop(0)
+                    rms = float(np.sqrt(np.mean(np.array([r[:8] for r in recent_buf]) ** 2)))
+                    if rms >= DTW_ONSET_RMS:
+                        waiting_onset[0] = False
+                        recording[0]     = True
+                        gesture_buf.clear()
+                        gesture_buf.append(full_row)  # start from onset frame, matching inference
+                    continue
+
+                # --- Phase 2: record until RMS drops ---
+                if not recording[0]:
+                    continue
+
+                gesture_buf.append(full_row)
+                window = gesture_buf[-DTW_RMS_WINDOW:]
+                rms = float(np.sqrt(np.mean(np.array([r[:8] for r in window]) ** 2)))
+                if rms < DTW_OFFSET_RMS:
+                    quiet_count[0] += 1
+                else:
+                    quiet_count[0] = 0
+
+                if (
+                    len(gesture_buf) >= DTW_MIN_GESTURE
+                    and quiet_count[0] >= DTW_MIN_QUIET
+                ) or len(gesture_buf) >= DTW_MAX_GESTURE:
+                    recording[0] = False
+                    done[0]      = True
+
+        async def on_imu_data(self, imu: IMUData) -> None:
+            try:
+                o = imu.orientation; g = imu.gyroscope; a = imu.accelerometer
+                imu_state[0] = np.array(
+                    [o.w, o.x, o.y, g[0], g[1], g[2], a[0], a[1], a[2]],
+                    dtype=np.float32,
+                )
+            except Exception: pass
+
+        async def on_emg_data_aggregated(self, eds) -> None: pass
+        async def on_aggregated_data(self, ad) -> None: pass
+        async def on_fv_data(self, fvd) -> None: pass
+        async def on_motion_event(self, me) -> None: pass
+        async def on_classifier_event(self, ce) -> None: pass
+
+    print(clr("  Connecting to Myo...", CYAN))
+    client = await WordsMyo.with_device(mac=device_mac or None)
+    await client.setup(
+        emg_mode=EMGMode.SEND_EMG,
+        imu_mode=IMUMode.SEND_ALL,
+        classifier_mode=ClassifierMode.DISABLED,
+    )
+    print(clr("  Connected.\n", GREEN))
+
+    loop = asyncio.get_event_loop()
+
+    # Load recordings accumulated from previous sessions
+    phrase_recordings: dict[str, list] = {
+        p: list(recs) for p, recs in load_phrase_recordings(user_id).items()
+    }
+    existing_total = sum(len(v) for v in phrase_recordings.values())
+    if existing_total:
+        print(clr(f"  Loaded {existing_total} existing recordings "
+                  f"({len(phrase_recordings)} phrases) from previous sessions.", CYAN))
+        for p, recs in sorted(phrase_recordings.items()):
+            print(f"    {p}: {len(recs)} reps")
+        print(clr("  New reps will be added on top. "
+                  f"Delete models/user_{user_id}/phrase_recordings.pkl to start fresh.\n", DIM))
+    else:
+        print(clr("  No existing recordings found — starting fresh.\n", DIM))
+
+    client_task = asyncio.create_task(client.start())
+    await asyncio.sleep(1.0)
+
+    for phrase in PHRASES:
+        print(f"  {clr(phrase.upper(), BOLD + CYAN)}")
+        rep = 0
+        while rep < reps:
+            await loop.run_in_executor(None, input,
+                f"    Rep {rep+1}/{reps} — ready? Press Enter then perform the sign ")
+
+            # 3-2-1 countdown — gives user time to prepare
+            for c in (3, 2, 1):
+                print(f"\r    {clr(str(c), YELLOW)}...", end="", flush=True)
+                await asyncio.sleep(0.35)
+            print(f"\r    {clr('waiting...', CYAN)}  start signing when ready          ",
+                  end="", flush=True)
+
+            recent_buf.clear()
+            gesture_buf.clear()
+            quiet_count[0]  = 0
+            done[0]         = False
+            waiting_onset[0] = True  # on_emg_data waits for onset, then flips recording[0]
+
+            # Wait for onset + auto-stop (or hard timeout)
+            timeout = 10.0
+            t0      = asyncio.get_event_loop().time()
+            while not done[0] and (asyncio.get_event_loop().time() - t0) < timeout:
+                if recording[0]:
+                    frames = len(gesture_buf)
+                    print(f"\r    {clr('* REC', RED)}  {frames} fr    ", end="", flush=True)
+                await asyncio.sleep(0.02)
+            waiting_onset[0] = False
+            recording[0]     = False
+
+            n_frames = len(gesture_buf)
+            if n_frames < DTW_MIN_GESTURE:
+                print(clr(f"\r    too short ({n_frames} samples) — try again", RED))
+                continue  # don't advance rep
+
+            raw = np.array(gesture_buf, dtype=np.float32)
+            phrase_recordings.setdefault(phrase, []).append(raw)
+            rep += 1
+            print(clr(f"\r    {n_frames} samples recorded ({rep}/{reps})    ", GREEN))
+
+        print()
+
+    client_task.cancel()
+    try: await client_task
+    except (asyncio.CancelledError, Exception): pass
+    await client.stop()
+    await client.disconnect()
+
+    # Persist raw recordings first — safe to interrupt training after this point
+    save_phrase_recordings(phrase_recordings, user_id)
+    total_reps = sum(len(v) for v in phrase_recordings.values())
+    print(clr(f"\n  Saved {total_reps} total recordings "
+              f"({total_reps - existing_total} new + {existing_total} from previous sessions).", CYAN))
+
+    print(clr("  Training SVM model...", CYAN))
+    model = train_dtw(phrase_recordings)
+    save_dtw_model(model, user_id)
+    print(clr(f"  Done! Run without --train-words to start recognition.", GREEN))
+    print(clr(f"  Run --train-words again any time to add more reps and improve accuracy.\n", DIM))
+
+
 async def main(args: argparse.Namespace) -> None:
     print()
-    print(clr("  Echo  |  ASL Fingerspelling  |  DyFAV", BOLD))
-    print(clr("  Myo BLE → EMG+IMU → DyFAV → letters → LLM → English", DIM))
+    print(clr("  Echo  |  ASL Recognition  |  DyFAV + DTW", BOLD))
+    print(clr("  Myo BLE → EMG+IMU → letters / phrases → LLM → English", DIM))
     print()
 
     if args.scan:
@@ -814,6 +1212,14 @@ async def main(args: argparse.Namespace) -> None:
 
     if args.inspect:
         await _inspect(device_mac=args.device)
+        return
+
+    if args.train_words:
+        await _train_words_terminal(
+            user_id=args.user,
+            device_mac=args.device,
+            reps=args.train_words_reps,
+        )
         return
 
     if args.train:
@@ -847,10 +1253,14 @@ if __name__ == "__main__":
     parser.add_argument("--user",      default="default",  help="User ID for model loading/saving")
     parser.add_argument("--scan",      action="store_true", help="Scan for BLE devices and exit")
     parser.add_argument("--inspect",   action="store_true", help="Stream raw EMG+IMU values to terminal (for verifying sensor layout)")
-    parser.add_argument("--train",     action="store_true", help="Terminal training mode — record poses and build personal model")
-    parser.add_argument("--train-reps", type=int, default=TRAIN_REPS_NEEDED, dest="train_reps",
+    parser.add_argument("--train",       action="store_true", help="Terminal training mode — record ASL letters (DyFAV)")
+    parser.add_argument("--train-reps",  type=int, default=TRAIN_REPS_NEEDED, dest="train_reps",
                         help=f"Recordings per letter in --train mode (default: {TRAIN_REPS_NEEDED})")
-    parser.add_argument("--no-llm",   action="store_true", help="Skip LLM sentence reconstruction")
+    parser.add_argument("--train-words", action="store_true", dest="train_words",
+                        help="Terminal training mode — record phrases/words (DTW)")
+    parser.add_argument("--train-words-reps", type=int, default=DTW_TRAIN_REPS, dest="train_words_reps",
+                        help=f"Recordings per phrase in --train-words mode (default: {DTW_TRAIN_REPS})")
+    parser.add_argument("--no-llm",     action="store_true", help="Skip LLM sentence reconstruction")
     parser.add_argument("--ws-port",  type=int, default=8765, dest="ws_port",
                         help="WebSocket server port (default: 8765)")
     asyncio.run(main(parser.parse_args()))
