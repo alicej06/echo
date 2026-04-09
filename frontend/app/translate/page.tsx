@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Play, Square, RotateCcw, Bookmark } from "lucide-react";
+import { Play, Square, RotateCcw, Trash2 } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 
 const BG = "#F0EFF8";
@@ -11,39 +11,50 @@ const TEXT = "#1C1C1E";
 const TEXT2 = "#6C6C70";
 const TEXT3 = "#8E8E93";
 const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+const GREEN = "#34C759";
+const AMBER = "#F59E0B";
 
-const EMG_CLASSES = [
-  "emg-bar-1","emg-bar-2","emg-bar-3","emg-bar-4","emg-bar-5",
-  "emg-bar-2","emg-bar-4","emg-bar-1","emg-bar-3","emg-bar-5",
-  "emg-bar-4","emg-bar-2","emg-bar-1","emg-bar-5","emg-bar-3",
-  "emg-bar-1","emg-bar-4","emg-bar-2","emg-bar-5","emg-bar-3",
-];
+// DTW_MAX_GESTURE from backend — used to size the capture progress bar
+const MAX_GESTURE_FRAMES = 1200;
+// DTW_ONSET_RMS — threshold line position on the RMS bar
+const ONSET_RMS = 18.0;
+// Rough max RMS for full bar display
+const MAX_RMS = 60.0;
 
 export default function TranslatePage() {
-  const { status, currentLetter, confidence, letterStream, sentence, connect, disconnect, startDemo, clearStream } = useMyoWs();
-  const [wsUrl] = useState("ws://localhost:8765");
-  const [letterKey, setLetterKey] = useState(0);
-  const [saved, setSaved] = useState(false);
-  const prevLetterRef = useRef("");
-  const prevSentenceRef = useRef("");
+  const {
+    status,
+    currentPhrase,
+    phraseConfidence,
+    phraseStream,
+    deviceName,
+    gestureState,
+    gestureRms,
+    gestureFrames,
+    connect,
+    disconnect,
+    clearStream,
+  } = useMyoWs();
+
+  const [phraseKey, setPhraseKey] = useState(0);
+  const prevPhraseRef = useRef("");
   const sessionStartRef = useRef<number>(Date.now());
 
   const isActive = status === "connected" || status === "demo";
 
-  // Save session on disconnect
+  // Save session to localStorage on disconnect
   useEffect(() => {
     if (status === "connected" || status === "demo") {
       sessionStartRef.current = Date.now();
     }
-    if (status === "disconnected" && letterStream.length > 0) {
+    if (status === "disconnected" && phraseStream.length > 0) {
       try {
         const raw = localStorage.getItem("maia_sessions");
         const sessions = raw ? (JSON.parse(raw) as object[]) : [];
         sessions.push({
           id: Date.now().toString(),
           date: new Date().toISOString(),
-          letters: letterStream,
-          sentences: sentence ? [sentence] : [],
+          phrases: phraseStream,
           duration: Date.now() - sessionStartRef.current,
         });
         localStorage.setItem("maia_sessions", JSON.stringify(sessions.slice(-50)));
@@ -52,176 +63,258 @@ export default function TranslatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
-  // Letter animation
+  // Animate on new phrase
   useEffect(() => {
-    if (currentLetter && currentLetter !== prevLetterRef.current) {
-      setLetterKey((k) => k + 1);
-      prevLetterRef.current = currentLetter;
+    if (currentPhrase && currentPhrase !== prevPhraseRef.current) {
+      setPhraseKey((k) => k + 1);
+      prevPhraseRef.current = currentPhrase;
     }
-  }, [currentLetter]);
+  }, [currentPhrase]);
 
-  // TTS on new sentence
+  // TTS: speak new phrase automatically
   useEffect(() => {
-    if (!sentence || sentence === prevSentenceRef.current) return;
-    prevSentenceRef.current = sentence;
+    if (!currentPhrase || currentPhrase === prevPhraseRef.current) return;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(sentence);
+      const utt = new SpeechSynthesisUtterance(currentPhrase);
       utt.rate = 0.95;
       window.speechSynthesis.speak(utt);
     }
-  }, [sentence]);
-
-  const handleStart = useCallback(() => {
-    startDemo();
-  }, [startDemo]);
+  }, [currentPhrase]);
 
   const handleReplay = useCallback(() => {
-    if (!sentence) return;
+    if (!currentPhrase) return;
     window.speechSynthesis?.cancel();
-    const utt = new SpeechSynthesisUtterance(sentence);
+    const utt = new SpeechSynthesisUtterance(currentPhrase);
     utt.rate = 0.95;
     window.speechSynthesis?.speak(utt);
-  }, [sentence]);
-
-  const handleSave = useCallback(() => {
-    if (!letterStream.length && !sentence) return;
-    try {
-      const raw = localStorage.getItem("maia_sessions");
-      const sessions = raw ? (JSON.parse(raw) as object[]) : [];
-      sessions.push({
-        id: Date.now().toString(),
-        date: new Date().toISOString(),
-        letters: letterStream,
-        sentences: sentence ? [sentence] : [],
-        duration: Date.now() - sessionStartRef.current,
-      });
-      localStorage.setItem("maia_sessions", JSON.stringify(sessions.slice(-50)));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch { /* ignore */ }
-  }, [letterStream, sentence]);
+  }, [currentPhrase]);
 
   const statusLabel = {
-    disconnected: "Ready to translate",
+    disconnected: "Disconnected",
     connecting: "Connecting...",
-    connected: "Translating",
+    connected: "Connected",
     demo: "Demo mode",
   }[status];
 
   const statusDotColor = {
     disconnected: TEXT3,
-    connecting: "#F59E0B",
-    connected: "#34C759",
+    connecting: AMBER,
+    connected: GREEN,
     demo: PURPLE,
   }[status];
+
+  const recentPhrases = phraseStream.slice(-8);
+
+  // Gesture status card content
+  const rmsBarPct = Math.min(gestureRms / MAX_RMS, 1);
+  const onsetLinePct = ONSET_RMS / MAX_RMS;
+  const captureBarPct = Math.min(gestureFrames / MAX_GESTURE_FRAMES, 1);
+
+  const gestureLabel =
+    !isActive ? "Inactive" :
+    gestureState === "capturing" ? `Capturing · ${gestureFrames} frames` :
+    gestureState === "thinking"  ? "Recognizing..." :
+    "Listening";
+
+  const gestureColor =
+    gestureState === "capturing" ? GREEN :
+    gestureState === "thinking"  ? PURPLE :
+    TEXT3;
 
   return (
     <main className="min-h-screen pb-24 px-4" style={{ backgroundColor: BG }}>
       <div className="max-w-sm mx-auto pt-12">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold" style={{ color: TEXT }}>Live Translation</h1>
-          <p className="text-sm mt-1" style={{ color: TEXT2 }}>ASL gestures to spoken words</p>
+          <h1 className="text-2xl font-bold" style={{ color: TEXT }}>
+            Live Translation
+          </h1>
+          <p className="text-sm mt-1" style={{ color: TEXT2 }}>
+            ASL gestures → spoken words
+          </p>
         </div>
 
         {/* Main output card */}
         <div
-          className="rounded-2xl p-6 mb-4 min-h-40 flex flex-col items-center justify-center"
-          style={{ backgroundColor: CARD, boxShadow: SHADOW }}
+          className="rounded-2xl p-6 mb-4 flex flex-col"
+          style={{ backgroundColor: CARD, boxShadow: SHADOW, minHeight: 200 }}
         >
-          <div className="flex items-center gap-2 mb-4 self-start">
-            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: statusDotColor }} />
-            <span className="text-sm" style={{ color: TEXT3 }}>{statusLabel}</span>
+          {/* Status row */}
+          <div className="flex items-center gap-2 mb-4">
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: statusDotColor }}
+            />
+            <span className="text-sm" style={{ color: TEXT3 }}>
+              {statusLabel}
+              {deviceName && status === "connected" ? ` · ${deviceName}` : ""}
+            </span>
           </div>
 
-          {currentLetter && isActive ? (
-            <div key={`${currentLetter}-${letterKey}`} className="letter-pop flex flex-col items-center gap-2">
-              <span
-                className="font-bold leading-none"
-                style={{ fontSize: 80, color: PURPLE }}
+          {/* Phrase display */}
+          <div className="flex-1 flex flex-col items-center justify-center py-2">
+            {currentPhrase && isActive ? (
+              <div
+                key={`${currentPhrase}-${phraseKey}`}
+                className="letter-pop flex flex-col items-center gap-3 w-full"
               >
-                {currentLetter}
-              </span>
-              <div className="w-full h-1 rounded-full overflow-hidden" style={{ backgroundColor: "rgba(124,111,224,0.15)" }}>
-                <div
-                  className="h-full rounded-full transition-all duration-300"
-                  style={{ width: `${confidence * 100}%`, backgroundColor: PURPLE }}
-                />
-              </div>
-              <span className="text-xs" style={{ color: TEXT3 }}>{(confidence * 100).toFixed(0)}% confidence</span>
-            </div>
-          ) : sentence ? (
-            <p className="text-lg font-medium text-center leading-relaxed" style={{ color: TEXT }}>
-              {sentence}
-            </p>
-          ) : (
-            <p className="text-base text-center" style={{ color: TEXT3 }}>
-              Press Start to begin translation
-            </p>
-          )}
-
-          {/* Letter stream */}
-          {letterStream.length > 0 && (
-            <div className="mt-4 self-start w-full">
-              <div className="flex flex-wrap gap-1 max-h-16 overflow-hidden">
-                {letterStream.slice(-30).map((l, i, arr) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center justify-center w-6 h-6 rounded text-xs font-bold"
-                    style={{
-                      backgroundColor: i === arr.length - 1 ? PURPLE_LIGHT : "rgba(0,0,0,0.04)",
-                      color: i === arr.length - 1 ? PURPLE : TEXT3,
-                    }}
+                <span
+                  className="font-bold leading-tight text-center"
+                  style={{ fontSize: 52, color: PURPLE }}
+                >
+                  {currentPhrase}
+                </span>
+                <div className="w-full flex flex-col items-center gap-1">
+                  <div
+                    className="w-full h-1.5 rounded-full overflow-hidden"
+                    style={{ backgroundColor: "rgba(124,111,224,0.15)" }}
                   >
-                    {l}
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${phraseConfidence * 100}%`,
+                        backgroundColor: PURPLE,
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs" style={{ color: TEXT3 }}>
+                    {(phraseConfidence * 100).toFixed(0)}% confidence
                   </span>
-                ))}
+                </div>
+              </div>
+            ) : (
+              <p
+                className="text-base text-center leading-relaxed"
+                style={{ color: TEXT3 }}
+              >
+                {isActive
+                  ? "Start signing — phrases will appear here"
+                  : "Press Start to begin translation"}
+              </p>
+            )}
+          </div>
+
+          {/* Phrase history chips */}
+          {recentPhrases.length > 0 && (
+            <div className="mt-4 pt-4" style={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}>
+              <div className="flex flex-wrap gap-1.5">
+                {recentPhrases.map((phrase, i, arr) => {
+                  const isLatest = i === arr.length - 1;
+                  return (
+                    <span
+                      key={i}
+                      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium"
+                      style={{
+                        backgroundColor: isLatest ? PURPLE_LIGHT : "rgba(0,0,0,0.05)",
+                        color: isLatest ? PURPLE : TEXT3,
+                      }}
+                    >
+                      {phrase}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           )}
         </div>
 
-        {/* EMG Signal card */}
+        {/* Gesture status card */}
         <div
           className="rounded-2xl p-4 mb-4"
           style={{ backgroundColor: CARD, boxShadow: SHADOW }}
         >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: TEXT3 }}>
-              EMG Signal
+              Signal
             </span>
-            <div className="flex items-center gap-1.5">
-              <span style={{ fontSize: 12 }}>🎙</span>
-              <span className="text-xs" style={{ color: isActive ? "#34C759" : TEXT3 }}>
-                {isActive ? "Active" : "Inactive"}
-              </span>
-            </div>
+            <span className="text-xs font-medium" style={{ color: gestureColor }}>
+              {gestureLabel}
+            </span>
           </div>
 
-          {/* Waveform bars */}
-          <div className="flex items-center gap-1" style={{ height: 40 }}>
-            {EMG_CLASSES.map((cls, i) => (
+          {gestureState === "thinking" && isActive ? (
+            /* Thinking: animated dots */
+            <div className="flex items-center justify-center gap-2" style={{ height: 36 }}>
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="rounded-full"
+                  style={{
+                    width: 8, height: 8,
+                    backgroundColor: PURPLE,
+                    animation: `thinking-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
+                  }}
+                />
+              ))}
+            </div>
+          ) : gestureState === "capturing" && isActive ? (
+            /* Capturing: growing progress bar */
+            <div style={{ height: 36 }} className="flex flex-col justify-center gap-1.5">
               <div
-                key={i}
-                className={isActive ? cls : ""}
-                style={{
-                  flex: 1,
-                  height: isActive ? undefined : "20%",
-                  backgroundColor: isActive ? PURPLE : "rgba(0,0,0,0.12)",
-                  borderRadius: 2,
-                  alignSelf: "center",
-                  transition: "background-color 0.3s",
-                }}
-              />
-            ))}
-          </div>
+                className="w-full rounded-full overflow-hidden"
+                style={{ height: 8, backgroundColor: "rgba(0,0,0,0.07)" }}
+              >
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${captureBarPct * 100}%`,
+                    backgroundColor: GREEN,
+                    transition: "width 0.1s linear",
+                  }}
+                />
+              </div>
+              <div className="flex justify-between">
+                <span className="text-xs" style={{ color: TEXT3 }}>
+                  {gestureFrames} frames
+                </span>
+                <span className="text-xs" style={{ color: TEXT3 }}>
+                  {MAX_GESTURE_FRAMES}
+                </span>
+              </div>
+            </div>
+          ) : (
+            /* Idle / inactive: RMS bar with onset threshold line */
+            <div style={{ height: 36 }} className="flex flex-col justify-center gap-1.5">
+              <div
+                className="w-full rounded-full overflow-hidden relative"
+                style={{ height: 8, backgroundColor: "rgba(0,0,0,0.07)" }}
+              >
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${rmsBarPct * 100}%`,
+                    backgroundColor: isActive
+                      ? (gestureRms >= ONSET_RMS ? GREEN : AMBER)
+                      : "rgba(0,0,0,0.15)",
+                    transition: "width 0.1s linear, background-color 0.2s",
+                  }}
+                />
+                {/* Onset threshold marker */}
+                {isActive && (
+                  <div
+                    className="absolute top-0 bottom-0 w-px"
+                    style={{
+                      left: `${onsetLinePct * 100}%`,
+                      backgroundColor: "rgba(0,0,0,0.2)",
+                    }}
+                  />
+                )}
+              </div>
+              {isActive && (
+                <div className="flex justify-between">
+                  <span className="text-xs" style={{ color: TEXT3 }}>RMS {gestureRms.toFixed(1)}</span>
+                  <span className="text-xs" style={{ color: TEXT3 }}>threshold {ONSET_RMS}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Start / Stop button */}
         {!isActive ? (
           <button
-            onClick={handleStart}
+            onClick={() => connect("ws://localhost:8765")}
             className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 text-white font-semibold mb-3 cursor-pointer"
             style={{ backgroundColor: PURPLE, fontSize: 16 }}
           >
@@ -240,53 +333,40 @@ export default function TranslatePage() {
         )}
 
         {/* Secondary buttons */}
-        <div className="flex gap-3">
+        <div className="flex gap-3 mb-4">
           <button
             onClick={handleReplay}
-            disabled={!sentence}
+            disabled={!currentPhrase}
             className="flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 font-medium cursor-pointer"
             style={{
               backgroundColor: CARD,
               boxShadow: SHADOW,
-              color: sentence ? TEXT2 : TEXT3,
+              color: currentPhrase ? TEXT2 : TEXT3,
               border: "1px solid rgba(0,0,0,0.06)",
               fontSize: 14,
-              opacity: sentence ? 1 : 0.5,
+              opacity: currentPhrase ? 1 : 0.5,
             }}
           >
             <RotateCcw size={15} />
             Replay
           </button>
           <button
-            onClick={handleSave}
-            disabled={!letterStream.length && !sentence}
+            onClick={clearStream}
+            disabled={phraseStream.length === 0}
             className="flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 font-medium cursor-pointer"
             style={{
               backgroundColor: CARD,
               boxShadow: SHADOW,
-              color: saved ? "#34C759" : (!letterStream.length && !sentence ? TEXT3 : TEXT2),
+              color: phraseStream.length > 0 ? TEXT2 : TEXT3,
               border: "1px solid rgba(0,0,0,0.06)",
               fontSize: 14,
-              opacity: (!letterStream.length && !sentence) ? 0.5 : 1,
+              opacity: phraseStream.length > 0 ? 1 : 0.5,
             }}
           >
-            <Bookmark size={15} />
-            {saved ? "Saved!" : "Save"}
+            <Trash2 size={15} />
+            Clear
           </button>
         </div>
-
-        {/* WS connect (tucked away, small) */}
-        {!isActive && (
-          <div className="mt-4">
-            <button
-              onClick={() => connect(wsUrl)}
-              className="w-full text-center text-xs py-2 rounded-xl cursor-pointer"
-              style={{ color: TEXT3, backgroundColor: "rgba(0,0,0,0.04)" }}
-            >
-              Connect to Myo wristband (ws://localhost:8765)
-            </button>
-          </div>
-        )}
       </div>
     </main>
   );

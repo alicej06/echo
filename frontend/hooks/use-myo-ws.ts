@@ -12,6 +12,12 @@ export interface TrainStatus {
   [letter: string]: number; // letter -> count of recordings (0-5)
 }
 
+export interface PhraseTrainStatus {
+  [phrase: string]: number; // phrase -> count of recordings
+}
+
+export type GestureState = "idle" | "capturing" | "thinking";
+
 export interface MyoState {
   status: MyoStatus;
   currentLetter: string;
@@ -22,6 +28,18 @@ export interface MyoState {
   deviceName: string;
   trainStatus: TrainStatus;
   modelReady: boolean;
+  // Phrase recognition
+  currentPhrase: string;
+  phraseConfidence: number;
+  phraseStream: string[];
+  // Gesture state
+  gestureState: GestureState;
+  gestureRms: number;
+  gestureFrames: number;
+  // Phrase training
+  phraseTrainStatus: PhraseTrainStatus;
+  dtwModelReady: boolean;
+  dtwCvAccuracy: number | null;
 }
 
 const DEMO_LETTERS = "HELLO WORLD ECHO ASL".split("").filter((c) => c !== " ");
@@ -34,6 +52,13 @@ const DEMO_SENTENCES = [
   "Thank you for your help.",
   "I need a moment please.",
   "That sounds good to me.",
+];
+const DEMO_PHRASES = [
+  "hello",
+  "my name is echo",
+  "nice to meet you",
+  "how are you",
+  "thank you",
 ];
 const WS_URL_DEFAULT: string =
   (typeof process !== "undefined" &&
@@ -59,6 +84,15 @@ export function useMyoWs() {
     deviceName: "",
     trainStatus: emptyTrainStatus(),
     modelReady: false,
+    currentPhrase: "",
+    phraseConfidence: 0,
+    phraseStream: [],
+    gestureState: "idle",
+    gestureRms: 0,
+    gestureFrames: 0,
+    phraseTrainStatus: {},
+    dtwModelReady: false,
+    dtwCvAccuracy: null,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -94,29 +128,41 @@ export function useMyoWs() {
       letterStream: [],
       sentence: "",
       deviceName: "Demo",
+      currentPhrase: "",
+      phraseConfidence: 0,
+      phraseStream: [],
     }));
 
     demoIntervalRef.current = setInterval(() => {
-      const letter = DEMO_LETTERS[demoIndexRef.current % DEMO_LETTERS.length];
+      const phraseIdx = demoIndexRef.current % DEMO_PHRASES.length;
       demoIndexRef.current += 1;
-      const conf = 0.4 + Math.random() * 0.55;
+      const phrase = DEMO_PHRASES[phraseIdx];
+      const conf = 0.7 + Math.random() * 0.29;
+
+      // Also keep letter demo running for backwards compat
+      const letter = DEMO_LETTERS[demoIndexRef.current % DEMO_LETTERS.length];
+      const letterConf = 0.4 + Math.random() * 0.55;
       const sentenceIdx =
         Math.floor(demoIndexRef.current / DEMO_LETTERS.length) %
         DEMO_SENTENCES.length;
       const emitSentence = demoIndexRef.current % DEMO_LETTERS.length === 0;
 
       setState((s) => {
-        const nextStream = [...s.letterStream, letter].slice(-MAX_STREAM);
+        const nextLetterStream = [...s.letterStream, letter].slice(-MAX_STREAM);
+        const nextPhraseStream = [...s.phraseStream, phrase].slice(-MAX_STREAM);
         return {
           ...s,
           currentLetter: letter,
-          confidence: conf,
-          topK: [{ letter, score: conf }],
-          letterStream: nextStream,
+          confidence: letterConf,
+          topK: [{ letter, score: letterConf }],
+          letterStream: nextLetterStream,
           sentence: emitSentence ? DEMO_SENTENCES[sentenceIdx] : s.sentence,
+          currentPhrase: phrase,
+          phraseConfidence: conf,
+          phraseStream: nextPhraseStream,
         };
       });
-    }, 600);
+    }, 2500);
   }, [disconnect]);
 
   const connect = useCallback(
@@ -131,6 +177,15 @@ export function useMyoWs() {
         sentence: "",
         trainStatus: emptyTrainStatus(),
         modelReady: false,
+        currentPhrase: "",
+        phraseConfidence: 0,
+        phraseStream: [],
+        gestureState: "idle",
+        gestureRms: 0,
+        gestureFrames: 0,
+        phraseTrainStatus: {},
+        dtwModelReady: false,
+        dtwCvAccuracy: null,
       }));
 
       const ws = new WebSocket(url);
@@ -157,6 +212,25 @@ export function useMyoWs() {
               topK,
               letterStream: [...s.letterStream, letter].slice(-MAX_STREAM),
             }));
+          } else if (msg.type === "gesture_state") {
+            const gs = String(msg.state ?? "idle") as GestureState;
+            setState((s) => ({
+              ...s,
+              gestureState: gs,
+              gestureRms: gs === "capturing" || gs === "idle" ? Number(msg.rms ?? 0) : s.gestureRms,
+              gestureFrames: gs === "capturing" ? Number(msg.frames ?? 0) : 0,
+            }));
+          } else if (msg.type === "phrase") {
+            const phrase = String(msg.phrase ?? "");
+            const phraseConfidence = Number(msg.confidence ?? 0);
+            setState((s) => ({
+              ...s,
+              currentPhrase: phrase,
+              phraseConfidence,
+              phraseStream: [...s.phraseStream, phrase].slice(-MAX_STREAM),
+              gestureState: "idle",
+              gestureFrames: 0,
+            }));
           } else if (msg.type === "sentence") {
             setState((s) => ({ ...s, sentence: String(msg.text ?? "") }));
           } else if (msg.type === "status") {
@@ -172,8 +246,29 @@ export function useMyoWs() {
               ...s,
               trainStatus: { ...s.trainStatus, [letter]: count },
             }));
+          } else if (msg.type === "train_phrase_ack") {
+            const phrase = String(msg.phrase ?? "");
+            const count = Number(msg.count ?? 0);
+            setState((s) => ({
+              ...s,
+              phraseTrainStatus: { ...s.phraseTrainStatus, [phrase]: count },
+            }));
+          } else if (msg.type === "phrase_train_status") {
+            const counts = (msg.counts ?? {}) as Record<string, number>;
+            setState((s) => ({
+              ...s,
+              phraseTrainStatus: { ...s.phraseTrainStatus, ...counts },
+            }));
           } else if (msg.type === "model_ready") {
             setState((s) => ({ ...s, modelReady: true }));
+          } else if (msg.type === "dtw_model_ready") {
+            const cvAccuracy =
+              msg.cv_accuracy != null ? Number(msg.cv_accuracy) : null;
+            setState((s) => ({
+              ...s,
+              dtwModelReady: true,
+              dtwCvAccuracy: cvAccuracy,
+            }));
           }
         } catch {
           // ignore malformed frames
@@ -201,7 +296,7 @@ export function useMyoWs() {
     }
   }, []);
 
-  // Training commands
+  // Training commands (letter-based)
   const trainRecord = useCallback(
     (letter: string) => {
       send({ type: "train_record", letter: letter.toLowerCase() });
@@ -211,6 +306,18 @@ export function useMyoWs() {
 
   const trainModel = useCallback(() => {
     send({ type: "train_model" });
+  }, [send]);
+
+  // Phrase training commands
+  const trainPhrase = useCallback(
+    (phrase: string) => {
+      send({ type: "train_phrase", phrase });
+    },
+    [send],
+  );
+
+  const trainPhrasesModel = useCallback(() => {
+    send({ type: "train_phrases_model" });
   }, [send]);
 
   const sendCorrection = useCallback(
@@ -226,6 +333,8 @@ export function useMyoWs() {
       currentLetter: "",
       letterStream: [],
       sentence: "",
+      currentPhrase: "",
+      phraseStream: [],
     }));
   }, []);
 
@@ -244,6 +353,8 @@ export function useMyoWs() {
     clearStream,
     trainRecord,
     trainModel,
+    trainPhrase,
+    trainPhrasesModel,
     sendCorrection,
   };
 }

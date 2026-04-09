@@ -7,89 +7,77 @@ import {
   Radio,
   Play,
   Loader2,
-  AlertCircle,
   ChevronRight,
 } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 
-const ASL_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-const REPS_NEEDED = 5;
+const PHRASES = [
+  "hello",
+  "my",
+  "name",
+  "echo",
+  "nice to meet you",
+  "how are you",
+  "thank you",
+] as const;
 
-// ASL fingerspelling descriptions (from the paper's Table 1)
-const LETTER_HINTS: Record<string, string> = {
-  A: "Fist with thumb to side",
-  B: "Flat open hand, thumb in",
-  C: "Curved fingers and thumb",
-  D: "Index up, others curved to thumb",
-  E: "Fingers bent/retracted to palm",
-  F: "Thumb + index touch, others spread",
-  G: "Index + thumb point sideways",
-  H: "Index + middle extended sideways",
-  I: "Pinky extended from fist",
-  J: "Pinky extended, trace J",
-  K: "Index + middle + thumb form K",
-  L: "Thumb + index right angle",
-  M: "Three fingers over thumb",
-  N: "Two fingers over thumb",
-  O: "Fingers + thumb form O",
-  P: "K-shape pointing down",
-  Q: "G-shape pointing down",
-  R: "Index + middle crossed",
-  S: "Fist with thumb over fingers",
-  T: "Thumb between index + middle",
-  U: "Index + middle together up",
-  V: "Index + middle spread (peace)",
-  W: "First three fingers spread",
-  X: "Index hooked",
-  Y: "Thumb + pinky spread",
-  Z: "Index traces Z",
+const REPS_NEEDED = 5;
+const REPS_TO_TRAIN = 3;
+
+const PHRASE_HINTS: Record<string, string> = {
+  hello: "Wave hand side to side",
+  my: "Flat hand on chest",
+  name: "Tap index + middle fingers together",
+  echo: "Fingerspell E-C-H-O",
+  "nice to meet you": "Flat hand slides off other palm",
+  "how are you": "Bent fingers roll forward, then point",
+  "thank you": "Flat hand from chin forward",
 };
 
-function LetterCard({
-  letter,
+function PhraseCard({
+  phrase,
   count,
-  isActive,
-  isRecording,
+  isListening,
   onRecord,
   disabled,
 }: {
-  letter: string;
+  phrase: string;
   count: number;
-  isActive: boolean;
-  isRecording: boolean;
+  isListening: boolean;
   onRecord: () => void;
   disabled: boolean;
 }) {
   const done = count >= REPS_NEEDED;
+  const hasEnough = count >= REPS_TO_TRAIN;
   const pct = Math.min(count / REPS_NEEDED, 1);
 
   return (
     <div
       className="rounded-2xl p-4 flex flex-col gap-3 transition-all duration-200"
       style={{
-        background: isActive
+        background: isListening
           ? "rgba(6,182,212,0.08)"
           : done
             ? "rgba(34,197,94,0.06)"
             : "rgba(255,255,255,0.04)",
-        border: isActive
+        border: isListening
           ? "1px solid rgba(6,182,212,0.4)"
           : done
             ? "1px solid rgba(34,197,94,0.2)"
             : "1px solid rgba(255,255,255,0.08)",
       }}
     >
-      {/* Letter + count */}
-      <div className="flex items-start justify-between">
+      {/* Phrase text + rep dots */}
+      <div className="flex items-start justify-between gap-2">
         <span
-          className="text-3xl font-bold leading-none"
+          className="text-base font-semibold leading-tight"
           style={{
-            color: done ? "#22c55e" : isActive ? "#22d3ee" : "#e4e4e7",
+            color: done ? "#22c55e" : isListening ? "#22d3ee" : "#e4e4e7",
           }}
         >
-          {letter}
+          {phrase}
         </span>
-        <div className="flex items-center gap-1 mt-1">
+        <div className="flex items-center gap-1 mt-0.5 flex-shrink-0">
           {Array.from({ length: REPS_NEEDED }).map((_, i) => (
             <div
               key={i}
@@ -99,7 +87,9 @@ function LetterCard({
                   i < count
                     ? done
                       ? "#22c55e"
-                      : "#06b6d4"
+                      : hasEnough
+                        ? "#a78bfa"
+                        : "#06b6d4"
                     : "rgba(255,255,255,0.12)",
               }}
             />
@@ -118,59 +108,79 @@ function LetterCard({
             width: `${pct * 100}%`,
             background: done
               ? "#22c55e"
-              : "linear-gradient(90deg, #06b6d4, #0ea5e9)",
+              : hasEnough
+                ? "linear-gradient(90deg, #7c3aed, #a78bfa)"
+                : "linear-gradient(90deg, #06b6d4, #0ea5e9)",
           }}
         />
       </div>
 
       {/* Hint */}
       <p className="text-xs leading-snug" style={{ color: "#52525b" }}>
-        {LETTER_HINTS[letter]}
+        {PHRASE_HINTS[phrase]}
       </p>
 
-      {/* Record button */}
-      {!done && (
+      {/* Record / Complete button */}
+      {done ? (
+        <div className="flex items-center gap-2">
+          <div
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium"
+            style={{ background: "rgba(34,197,94,0.1)", color: "#22c55e" }}
+          >
+            <CheckCircle2 className="w-3 h-3" />
+            Complete
+          </div>
+          <button
+            onClick={onRecord}
+            disabled={disabled || isListening}
+            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200"
+            style={{
+              background: "rgba(255,255,255,0.06)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              color: "#71717a",
+              cursor: disabled ? "not-allowed" : "pointer",
+              opacity: disabled ? 0.5 : 1,
+            }}
+          >
+            {isListening ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Mic className="w-3 h-3" />
+            )}
+            Add rep
+          </button>
+        </div>
+      ) : (
         <button
           onClick={onRecord}
-          disabled={disabled || isRecording}
+          disabled={disabled || isListening}
           className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium transition-all duration-200"
           style={{
-            background: isActive
+            background: isListening
               ? "rgba(6,182,212,0.2)"
               : "rgba(255,255,255,0.06)",
-            border: isActive
+            border: isListening
               ? "1px solid rgba(6,182,212,0.4)"
               : "1px solid rgba(255,255,255,0.1)",
-            color: isActive ? "#22d3ee" : "#a1a1aa",
+            color: isListening ? "#22d3ee" : "#a1a1aa",
             cursor: disabled ? "not-allowed" : "pointer",
-            opacity: disabled && !isActive ? 0.5 : 1,
+            opacity: disabled && !isListening ? 0.5 : 1,
           }}
         >
-          {isRecording && isActive ? (
+          {isListening ? (
             <>
               <Loader2 className="w-3 h-3 animate-spin" />
-              Recording...
+              Listening...
             </>
           ) : (
             <>
               <Mic className="w-3 h-3" />
-              {count === 0 ? "Record" : `Record (${count}/${REPS_NEEDED})`}
+              {count === 0
+                ? "Record"
+                : `Record (${count}/${REPS_NEEDED})`}
             </>
           )}
         </button>
-      )}
-
-      {done && (
-        <div
-          className="flex items-center gap-1.5 py-2 justify-center rounded-xl text-xs font-medium"
-          style={{
-            background: "rgba(34,197,94,0.1)",
-            color: "#22c55e",
-          }}
-        >
-          <CheckCircle2 className="w-3 h-3" />
-          Complete
-        </div>
       )}
     </div>
   );
@@ -179,93 +189,116 @@ function LetterCard({
 export default function TrainPage() {
   const {
     status,
-    trainStatus,
-    modelReady,
+    phraseTrainStatus,
+    dtwModelReady,
+    dtwCvAccuracy,
     connect,
     disconnect,
-    trainRecord,
-    trainModel,
+    trainPhrase,
+    trainPhrasesModel,
   } = useMyoWs();
 
   const [wsUrl, setWsUrl] = useState("ws://localhost:8765");
-  const [activeLetter, setActiveLetter] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
+  const [listeningPhrase, setListeningPhrase] = useState<string | null>(null);
   const [isTraining, setIsTraining] = useState(false);
-  const [step, setStep] = useState<"connect" | "train" | "done">("connect");
-  const prevTrainRef = useRef<typeof trainStatus>({});
+  const [step, setStep] = useState<"connect" | "record" | "done">("connect");
+  const prevTrainRef = useRef<typeof phraseTrainStatus>({});
+  const listenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isConnected = status === "connected";
-  const totalDone = ASL_LETTERS.filter(
-    (l) => (trainStatus[l.toLowerCase()] ?? 0) >= REPS_NEEDED,
+
+  // Derived counts
+  const phrasesWithEnoughReps = PHRASES.filter(
+    (p) => (phraseTrainStatus[p] ?? 0) >= REPS_TO_TRAIN,
   ).length;
-  const allDone = totalDone === 26;
+  const totalComplete = PHRASES.filter(
+    (p) => (phraseTrainStatus[p] ?? 0) >= REPS_NEEDED,
+  ).length;
+  const canTrainModel = PHRASES.every(
+    (p) => (phraseTrainStatus[p] ?? 0) >= REPS_TO_TRAIN,
+  );
 
-  // Detect recording completion (count incremented)
+  // Detect recording completion (phrase count incremented)
   useEffect(() => {
-    if (!activeLetter) return;
-    const lc = activeLetter.toLowerCase();
-    const prev = prevTrainRef.current[lc] ?? 0;
-    const curr = trainStatus[lc] ?? 0;
+    if (!listeningPhrase) return;
+    const prev = prevTrainRef.current[listeningPhrase] ?? 0;
+    const curr = phraseTrainStatus[listeningPhrase] ?? 0;
     if (curr > prev) {
-      setIsRecording(false);
-      setActiveLetter(null);
+      setListeningPhrase(null);
+      if (listenTimeoutRef.current) {
+        clearTimeout(listenTimeoutRef.current);
+        listenTimeoutRef.current = null;
+      }
     }
-    prevTrainRef.current = { ...trainStatus };
-  }, [trainStatus, activeLetter]);
+    prevTrainRef.current = { ...phraseTrainStatus };
+  }, [phraseTrainStatus, listeningPhrase]);
 
-  // Move to train step on connect
+  // Move to record step on connect
   useEffect(() => {
-    if (isConnected && step === "connect") setStep("train");
-    if (status === "disconnected" && step !== "connect") setStep("connect");
+    if (isConnected && step === "connect") setStep("record");
+    if (status === "disconnected" && step === "record") setStep("connect");
   }, [isConnected, status, step]);
 
-  // Move to done on model ready
+  // Move to done when dtw model is ready
   useEffect(() => {
-    if (modelReady) {
+    if (dtwModelReady) {
       setIsTraining(false);
       setStep("done");
     }
-  }, [modelReady]);
+  }, [dtwModelReady]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (listenTimeoutRef.current) clearTimeout(listenTimeoutRef.current);
+    };
+  }, []);
 
   const handleRecord = useCallback(
-    (letter: string) => {
-      if (!isConnected || isRecording) return;
-      setActiveLetter(letter);
-      setIsRecording(true);
-      trainRecord(letter);
+    (phrase: string) => {
+      if (!isConnected || listeningPhrase !== null) return;
+      prevTrainRef.current = { ...phraseTrainStatus };
+      setListeningPhrase(phrase);
+      trainPhrase(phrase);
+      // 12-second timeout fallback
+      if (listenTimeoutRef.current) clearTimeout(listenTimeoutRef.current);
+      listenTimeoutRef.current = setTimeout(() => {
+        setListeningPhrase(null);
+        listenTimeoutRef.current = null;
+      }, 12000);
     },
-    [isConnected, isRecording, trainRecord],
+    [isConnected, listeningPhrase, phraseTrainStatus, trainPhrase],
   );
 
   const handleTrainModel = useCallback(() => {
-    if (!allDone || isTraining) return;
+    if (!canTrainModel || isTraining) return;
     setIsTraining(true);
-    trainModel();
-  }, [allDone, isTraining, trainModel]);
+    trainPhrasesModel();
+  }, [canTrainModel, isTraining, trainPhrasesModel]);
 
   return (
     <main
       className="min-h-screen pt-16 pb-20 px-4"
       style={{ backgroundColor: "#0a0a0a" }}
     >
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="py-8">
           <h1 className="text-2xl font-bold text-white tracking-tight">
             Training
           </h1>
           <p className="text-sm mt-1" style={{ color: "#52525b" }}>
-            Record 5 samples of each ASL letter to build your personal model
+            Record 5 samples of each phrase to build your personal model
           </p>
         </div>
 
-        {/* Steps indicator */}
+        {/* Step indicator */}
         <div className="flex items-center gap-2 mb-8">
-          {(["connect", "train", "done"] as const).map((s, i) => {
+          {(["connect", "record", "done"] as const).map((s, i) => {
             const active = step === s;
             const past =
               (s === "connect" && step !== "connect") ||
-              (s === "train" && step === "done");
+              (s === "record" && step === "done");
             return (
               <div key={s} className="flex items-center gap-2">
                 {i > 0 && (
@@ -292,12 +325,14 @@ export default function TrainPage() {
                 >
                   {past ? (
                     <CheckCircle2 className="w-3 h-3" />
-                  ) : active ? (
-                    <Circle className="w-3 h-3" />
                   ) : (
                     <Circle className="w-3 h-3" />
                   )}
-                  {s === "connect" ? "Connect" : s === "train" ? "Record" : "Done"}
+                  {s === "connect"
+                    ? "Connect"
+                    : s === "record"
+                      ? "Record"
+                      : "Done"}
                 </div>
               </div>
             );
@@ -376,9 +411,9 @@ export default function TrainPage() {
         )}
 
         {/* Step 2: Record */}
-        {step === "train" && (
+        {step === "record" && (
           <div className="flex flex-col gap-6">
-            {/* Progress summary */}
+            {/* Progress summary card */}
             <div
               className="rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4"
               style={{
@@ -388,27 +423,30 @@ export default function TrainPage() {
             >
               <div>
                 <p className="text-2xl font-bold text-white">
-                  {totalDone}
-                  <span className="text-base font-normal" style={{ color: "#52525b" }}>
-                    {" "}/ 26 letters
+                  {totalComplete}
+                  <span
+                    className="text-base font-normal"
+                    style={{ color: "#52525b" }}
+                  >
+                    {" "}/ {PHRASES.length} phrases complete
                   </span>
                 </p>
                 <p className="text-xs mt-1" style={{ color: "#52525b" }}>
-                  {allDone
-                    ? "All letters recorded — ready to train!"
-                    : `${26 - totalDone} letters remaining`}
+                  {canTrainModel
+                    ? "Enough reps recorded — ready to train!"
+                    : `${phrasesWithEnoughReps}/${PHRASES.length} phrases have ≥${REPS_TO_TRAIN} reps`}
                 </p>
               </div>
               <div className="flex items-center gap-3">
                 <div
-                  className="h-2 w-48 rounded-full overflow-hidden"
+                  className="h-2 w-36 rounded-full overflow-hidden"
                   style={{ background: "rgba(255,255,255,0.08)" }}
                 >
                   <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{
-                      width: `${(totalDone / 26) * 100}%`,
-                      background: allDone
+                      width: `${(phrasesWithEnoughReps / PHRASES.length) * 100}%`,
+                      background: canTrainModel
                         ? "#22c55e"
                         : "linear-gradient(90deg, #06b6d4, #0ea5e9)",
                     }}
@@ -428,23 +466,25 @@ export default function TrainPage() {
               </div>
             </div>
 
-            {/* Letter grid */}
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3">
-              {ASL_LETTERS.map((letter) => (
-                <LetterCard
-                  key={letter}
-                  letter={letter}
-                  count={trainStatus[letter.toLowerCase()] ?? 0}
-                  isActive={activeLetter === letter}
-                  isRecording={isRecording}
-                  onRecord={() => handleRecord(letter)}
-                  disabled={!isConnected || (isRecording && activeLetter !== letter)}
+            {/* Phrase cards grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {PHRASES.map((phrase) => (
+                <PhraseCard
+                  key={phrase}
+                  phrase={phrase}
+                  count={phraseTrainStatus[phrase] ?? 0}
+                  isListening={listeningPhrase === phrase}
+                  onRecord={() => handleRecord(phrase)}
+                  disabled={
+                    !isConnected ||
+                    (listeningPhrase !== null && listeningPhrase !== phrase)
+                  }
                 />
               ))}
             </div>
 
-            {/* Train model button */}
-            {allDone && (
+            {/* Train model button — shown when all phrases have ≥ REPS_TO_TRAIN reps */}
+            {canTrainModel && (
               <div
                 className="rounded-2xl p-6 flex flex-col gap-4"
                 style={{
@@ -453,13 +493,19 @@ export default function TrainPage() {
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <CheckCircle2 className="w-5 h-5" style={{ color: "#22c55e" }} />
+                  <CheckCircle2
+                    className="w-5 h-5"
+                    style={{ color: "#22c55e" }}
+                  />
                   <div>
-                    <p className="text-sm font-medium" style={{ color: "#22c55e" }}>
-                      All 26 letters recorded
+                    <p
+                      className="text-sm font-medium"
+                      style={{ color: "#22c55e" }}
+                    >
+                      All phrases have enough reps
                     </p>
                     <p className="text-xs mt-0.5" style={{ color: "#52525b" }}>
-                      Click below to train your personal DyFAV model (~10 seconds)
+                      Click below to train your personal DTW phrase model
                     </p>
                   </div>
                 </div>
@@ -473,6 +519,7 @@ export default function TrainPage() {
                       : "rgba(34,197,94,0.2)",
                     border: "1px solid rgba(34,197,94,0.3)",
                     color: isTraining ? "#52525b" : "#22c55e",
+                    cursor: isTraining ? "not-allowed" : "pointer",
                   }}
                 >
                   {isTraining ? (
@@ -511,9 +558,18 @@ export default function TrainPage() {
               <h2 className="text-xl font-bold text-white mb-2">
                 Model trained!
               </h2>
+              {dtwCvAccuracy != null && (
+                <p
+                  className="text-sm font-medium mb-2"
+                  style={{ color: "#22c55e" }}
+                >
+                  Cross-validation accuracy:{" "}
+                  {(dtwCvAccuracy * 100).toFixed(1)}%
+                </p>
+              )}
               <p className="text-sm" style={{ color: "#71717a" }}>
-                Your personal DyFAV model has been saved. Head to the
-                Translate page to start signing.
+                Your personal phrase model has been saved. Head to the Translate
+                page to start signing.
               </p>
             </div>
             <a
@@ -524,25 +580,6 @@ export default function TrainPage() {
               <Radio className="w-4 h-4" />
               Start Translating
             </a>
-
-            <div
-              className="w-full rounded-xl p-4 text-left"
-              style={{
-                background: "rgba(0,0,0,0.3)",
-                border: "1px solid rgba(255,255,255,0.06)",
-              }}
-            >
-              <p className="text-xs mb-2" style={{ color: "#52525b" }}>
-                About DyFAV
-              </p>
-              <p className="text-xs leading-relaxed" style={{ color: "#71717a" }}>
-                Your model was trained using the DyFAV algorithm (Dynamic
-                Feature Selection and Voting). Each of the 26 letter agents
-                learned which of your 510 EMG+IMU features are most
-                discriminative for that specific letter — tuned to your
-                personal signing style.
-              </p>
-            </div>
           </div>
         )}
       </div>
