@@ -32,6 +32,9 @@ export interface MyoState {
   currentPhrase: string;
   phraseConfidence: number;
   phraseStream: string[];
+  // LLM sentence construction
+  sentenceBuilding: boolean;
+  sentencePhrases: string[];  // the phrases currently being built into a sentence
   // Gesture state
   gestureState: GestureState;
   gestureRms: number;
@@ -87,6 +90,8 @@ export function useMyoWs() {
     currentPhrase: "",
     phraseConfidence: 0,
     phraseStream: [],
+    sentenceBuilding: false,
+    sentencePhrases: [],
     gestureState: "idle",
     gestureRms: 0,
     gestureFrames: 0,
@@ -231,8 +236,16 @@ export function useMyoWs() {
               gestureState: "idle",
               gestureFrames: 0,
             }));
+          } else if (msg.type === "sentence_building") {
+            const phrases = Array.isArray(msg.phrases) ? (msg.phrases as string[]) : [];
+            setState((s) => ({ ...s, sentenceBuilding: true, sentencePhrases: phrases }));
           } else if (msg.type === "sentence") {
-            setState((s) => ({ ...s, sentence: String(msg.text ?? "") }));
+            setState((s) => ({
+              ...s,
+              sentence: String(msg.text ?? ""),
+              sentenceBuilding: false,
+              sentencePhrases: [],
+            }));
           } else if (msg.type === "status") {
             setState((s) => ({
               ...s,
@@ -316,6 +329,10 @@ export function useMyoWs() {
     [send],
   );
 
+  const trainNull = useCallback(() => {
+    send({ type: "train_null" });
+  }, [send]);
+
   const trainPhrasesModel = useCallback(() => {
     send({ type: "train_phrases_model" });
   }, [send]);
@@ -335,6 +352,8 @@ export function useMyoWs() {
       sentence: "",
       currentPhrase: "",
       phraseStream: [],
+      sentenceBuilding: false,
+      sentencePhrases: [],
     }));
   }, []);
 
@@ -354,6 +373,7 @@ export function useMyoWs() {
     trainRecord,
     trainModel,
     trainPhrase,
+    trainNull,
     trainPhrasesModel,
     sendCorrection,
   };

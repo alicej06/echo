@@ -46,6 +46,13 @@ PHRASES = [
     "thank you",
 ]
 
+# Internal label for the null/background class.
+# Recordings of random arm movements, resting positions, transitions — anything
+# that is NOT a sign.  When predicted, the system stays silent instead of
+# broadcasting a phrase.
+NULL_CLASS = "_null_"
+NULL_MIN_REPS = 5   # minimum null recordings before the class is included
+
 EMG_COLS      = slice(0,  8)   # 8 EMG channels
 IMU_COLS      = slice(11, 17)  # gyro[x,y,z] + accel[x,y,z]  (skip quaternion cols 8-10)
 DS_FACTOR     = 4              # downsample 200Hz → 50Hz
@@ -163,6 +170,8 @@ def _dtw_distance(A: np.ndarray, B: np.ndarray, r: float = SAKOE_RADIUS) -> floa
 
 N_SEGMENTS      = 5                        # temporal windows per recording
 _AUGMENT_SCALES = (0.80, 0.90, 1.10, 1.20) # time-stretch factors for augmentation
+_NOISE_STD      = 0.08                     # Gaussian noise std applied to preprocessed seq
+_rng            = np.random.default_rng(42)
 
 
 def _augment_stretch(raw: np.ndarray, scale: float) -> np.ndarray:
@@ -174,6 +183,30 @@ def _augment_stretch(raw: np.ndarray, scale: float) -> np.ndarray:
         [np.interp(idx, np.arange(n), raw[:, c]) for c in range(raw.shape[1])],
         axis=1,
     ).astype(np.float32)
+
+
+def _augment_channel_dropout(raw: np.ndarray, n_drop: int = 1) -> np.ndarray:
+    """Zero out n_drop randomly chosen EMG channels.
+
+    Forces the model to not over-rely on a single electrode contact.
+    Applied to raw signal before preprocessing so the z-score still runs
+    on the reduced signal.
+    """
+    out      = raw.copy()
+    channels = _rng.choice(8, size=n_drop, replace=False)
+    out[:, channels] = 0.0
+    return out
+
+
+def _augment_noise(seq: np.ndarray) -> np.ndarray:
+    """Add small Gaussian noise to a *preprocessed* sequence.
+
+    Applied after _preprocess so the noise is in the same z-scored space as
+    the real signal.  Mimics electrode contact variability and slight
+    repositioning between sessions.
+    """
+    noise = _rng.standard_normal(seq.shape).astype(np.float32)
+    return seq + noise * _NOISE_STD
 
 
 def _extract_features(seq: np.ndarray, n_segs: int = N_SEGMENTS) -> np.ndarray:
@@ -230,9 +263,17 @@ def train_dtw(recordings: dict[str, list[np.ndarray]]) -> dict:
     except ImportError:
         raise ImportError("scikit-learn required: pip install scikit-learn")
 
+    # Validate rep counts (null class has its own minimum)
     for phrase, recs in recordings.items():
+        if phrase == NULL_CLASS:
+            if len(recs) < NULL_MIN_REPS:
+                print(f"  [svm]  WARNING: null class has {len(recs)} recs (need {NULL_MIN_REPS} for reliable rejection) — training without it")
+                recordings = {k: v for k, v in recordings.items() if k != NULL_CLASS}
+            continue
         if len(recs) < MIN_REPS:
             raise ValueError(f"Phrase '{phrase}' has {len(recs)} recs, need {MIN_REPS}")
+
+    has_null = NULL_CLASS in recordings
 
     # --- Original data for honest CV ---
     # Must NOT include augmented samples — augmented test samples would be nearly
@@ -245,14 +286,22 @@ def train_dtw(recordings: dict[str, list[np.ndarray]]) -> dict:
     X_orig = np.array(X_orig, dtype=np.float32)
     y_orig = np.array(y_orig)
     n_classes = len(set(y_orig))
-    print(f"  [svm]  {len(X_orig)} original samples ({n_classes} classes, {X_orig.shape[1]} features)")
+    null_str = "  +null class" if has_null else "  (no null class — false positives likely)"
+    print(f"  [svm]  {len(X_orig)} original samples ({n_classes} classes, {X_orig.shape[1]} features){null_str}")
 
     # --- Augmented data for final training ---
+    # Augmentation: time-stretch × 4, channel dropout × 2, noise × 2 = 8× per rep
     X_aug, y_aug = list(X_orig), list(y_orig)
     for phrase, recs in recordings.items():
         for raw in recs:
-            for scale in _AUGMENT_SCALES:       # ×4 time-stretch augmentation
+            for scale in _AUGMENT_SCALES:       # ×4 time-stretch
                 X_aug.append(_extract_features(_preprocess(_augment_stretch(raw, scale))))
+                y_aug.append(phrase)
+            for n_drop in (1, 2):               # ×2 channel dropout
+                X_aug.append(_extract_features(_preprocess(_augment_channel_dropout(raw, n_drop))))
+                y_aug.append(phrase)
+            for _ in range(2):                  # ×2 Gaussian noise (on preprocessed seq)
+                X_aug.append(_extract_features(_augment_noise(_preprocess(raw))))
                 y_aug.append(phrase)
     X_aug = np.array(X_aug, dtype=np.float32)
     y_aug = np.array(y_aug)
@@ -307,6 +356,11 @@ def predict_dtw(
     proba      = clf.predict_proba(feat)[0]
     prob_dict  = dict(zip(clf.classes_, proba.tolist()))
     confidence = float(max(proba))
+    if phrase == NULL_CLASS:
+        # Null class: gesture was not a recognised sign — suppress output
+        if return_scores:
+            return None, confidence, prob_dict
+        return None, confidence
     if return_scores:
         return phrase, confidence, prob_dict
     return phrase, confidence
@@ -361,11 +415,13 @@ def evaluate_loo(recordings: dict[str, list[np.ndarray]]) -> float:
     Leave-one-out evaluation across all phrases.
     For each rep of each phrase, train on the rest, test on the held-out rep.
     """
-    phrases   = list(recordings.keys())
-    n_recs    = {p: len(v) for p, v in recordings.items()}
-    max_reps  = max(n_recs.values())
-    correct   = 0
-    total     = 0
+    phrases      = list(recordings.keys())
+    n_recs       = {p: len(v) for p, v in recordings.items()}
+    max_reps     = max(n_recs.values())
+    correct      = 0
+    total        = 0
+    results_true: list[str] = []
+    results_pred: list[str] = []
 
     print(f"\n  DTW LOO Evaluation — {len(phrases)} phrases")
     print(f"  {'='*50}")
@@ -375,9 +431,10 @@ def evaluate_loo(recordings: dict[str, list[np.ndarray]]) -> float:
         test_recs:  list[tuple[str, np.ndarray]] = []
 
         for phrase in phrases:
-            recs = recordings[phrase]
+            recs  = recordings[phrase]
+            min_r = NULL_MIN_REPS if phrase == NULL_CLASS else MIN_REPS
             train = [r for i, r in enumerate(recs) if i != held_idx]
-            if len(train) >= MIN_REPS and held_idx < len(recs):
+            if len(train) >= min_r and held_idx < len(recs):
                 train_recs[phrase] = train
                 test_recs.append((phrase, recs[held_idx]))
 
@@ -387,12 +444,28 @@ def evaluate_loo(recordings: dict[str, list[np.ndarray]]) -> float:
         model = train_dtw(train_recs)
         for true_phrase, raw in test_recs:
             pred, conf = predict_dtw(model, raw)
-            ok = (pred == true_phrase)
+            pred_label = pred if pred is not None else NULL_CLASS
+            ok = (pred_label == true_phrase)
             correct += int(ok)
             total   += 1
+            results_true.append(true_phrase)
+            results_pred.append(pred_label)
 
     acc = correct / total if total > 0 else 0.0
     print(f"  Accuracy: {acc:.1%}  ({correct}/{total})")
+
+    # Confusion matrix
+    labels = sorted(set(results_true))
+    col_w  = max(len(l) for l in labels) + 1
+    header = " " * (col_w + 2) + "".join(f"{l:>{col_w}}" for l in labels) + "  ← predicted"
+    print(f"\n  {header}")
+    for true_l in labels:
+        row = []
+        for pred_l in labels:
+            cnt = sum(1 for t, p in zip(results_true, results_pred) if t == true_l and p == pred_l)
+            row.append(f"{cnt:>{col_w}}")
+        print(f"  {true_l:<{col_w}} |{''.join(row)}")
+    print(f"  ↑ true")
     print(f"  {'='*50}\n")
     return acc
 

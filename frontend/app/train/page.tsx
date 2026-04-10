@@ -23,6 +23,9 @@ const PHRASES = [
 
 const REPS_NEEDED = 5;
 const REPS_TO_TRAIN = 3;
+const NULL_KEY = "_null_";
+const NULL_REPS_NEEDED = 10;
+const NULL_REPS_TO_TRAIN = 5;
 
 const PHRASE_HINTS: Record<string, string> = {
   hello: "Wave hand side to side",
@@ -195,6 +198,7 @@ export default function TrainPage() {
     connect,
     disconnect,
     trainPhrase,
+    trainNull,
     trainPhrasesModel,
   } = useMyoWs();
 
@@ -207,6 +211,8 @@ export default function TrainPage() {
 
   const isConnected = status === "connected";
 
+  const nullCount = phraseTrainStatus[NULL_KEY] ?? 0;
+
   // Derived counts
   const phrasesWithEnoughReps = PHRASES.filter(
     (p) => (phraseTrainStatus[p] ?? 0) >= REPS_TO_TRAIN,
@@ -214,9 +220,9 @@ export default function TrainPage() {
   const totalComplete = PHRASES.filter(
     (p) => (phraseTrainStatus[p] ?? 0) >= REPS_NEEDED,
   ).length;
-  const canTrainModel = PHRASES.every(
-    (p) => (phraseTrainStatus[p] ?? 0) >= REPS_TO_TRAIN,
-  );
+  const canTrainModel =
+    PHRASES.every((p) => (phraseTrainStatus[p] ?? 0) >= REPS_TO_TRAIN) &&
+    nullCount >= NULL_REPS_TO_TRAIN;
 
   // Detect recording completion (phrase count incremented)
   useEffect(() => {
@@ -259,7 +265,11 @@ export default function TrainPage() {
       if (!isConnected || listeningPhrase !== null) return;
       prevTrainRef.current = { ...phraseTrainStatus };
       setListeningPhrase(phrase);
-      trainPhrase(phrase);
+      if (phrase === NULL_KEY) {
+        trainNull();
+      } else {
+        trainPhrase(phrase);
+      }
       // 12-second timeout fallback
       if (listenTimeoutRef.current) clearTimeout(listenTimeoutRef.current);
       listenTimeoutRef.current = setTimeout(() => {
@@ -267,7 +277,7 @@ export default function TrainPage() {
         listenTimeoutRef.current = null;
       }, 12000);
     },
-    [isConnected, listeningPhrase, phraseTrainStatus, trainPhrase],
+    [isConnected, listeningPhrase, phraseTrainStatus, trainPhrase, trainNull],
   );
 
   const handleTrainModel = useCallback(() => {
@@ -433,8 +443,10 @@ export default function TrainPage() {
                 </p>
                 <p className="text-xs mt-1" style={{ color: "#52525b" }}>
                   {canTrainModel
-                    ? "Enough reps recorded — ready to train!"
-                    : `${phrasesWithEnoughReps}/${PHRASES.length} phrases have ≥${REPS_TO_TRAIN} reps`}
+                    ? "All reps recorded — ready to train!"
+                    : nullCount < NULL_REPS_TO_TRAIN
+                      ? `Need ${NULL_REPS_TO_TRAIN - nullCount} more null movements · ${phrasesWithEnoughReps}/${PHRASES.length} phrases ready`
+                      : `${phrasesWithEnoughReps}/${PHRASES.length} phrases have ≥${REPS_TO_TRAIN} reps`}
                 </p>
               </div>
               <div className="flex items-center gap-3">
@@ -483,6 +495,112 @@ export default function TrainPage() {
               ))}
             </div>
 
+            {/* Null / background class */}
+            <div
+              className="rounded-2xl p-4 flex flex-col gap-3"
+              style={{
+                background: listeningPhrase === NULL_KEY
+                  ? "rgba(251,146,60,0.08)"
+                  : nullCount >= NULL_REPS_TO_TRAIN
+                    ? "rgba(34,197,94,0.06)"
+                    : "rgba(255,255,255,0.04)",
+                border: listeningPhrase === NULL_KEY
+                  ? "1px solid rgba(251,146,60,0.4)"
+                  : nullCount >= NULL_REPS_TO_TRAIN
+                    ? "1px solid rgba(34,197,94,0.2)"
+                    : "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <span
+                    className="text-base font-semibold leading-tight block"
+                    style={{
+                      color: nullCount >= NULL_REPS_TO_TRAIN
+                        ? "#22c55e"
+                        : listeningPhrase === NULL_KEY
+                          ? "#fb923c"
+                          : "#e4e4e7",
+                    }}
+                  >
+                    Null / background
+                  </span>
+                  <span className="text-xs mt-0.5 block" style={{ color: "#52525b" }}>
+                    Required — prevents false positives
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 mt-0.5 flex-shrink-0">
+                  {Array.from({ length: NULL_REPS_NEEDED }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="w-2 h-2 rounded-full transition-all duration-300"
+                      style={{
+                        backgroundColor:
+                          i < nullCount
+                            ? nullCount >= NULL_REPS_TO_TRAIN
+                              ? "#22c55e"
+                              : "#fb923c"
+                            : "rgba(255,255,255,0.12)",
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div
+                className="h-1 rounded-full overflow-hidden"
+                style={{ background: "rgba(255,255,255,0.08)" }}
+              >
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.min(nullCount / NULL_REPS_NEEDED, 1) * 100}%`,
+                    background: nullCount >= NULL_REPS_TO_TRAIN ? "#22c55e" : "#fb923c",
+                  }}
+                />
+              </div>
+
+              <p className="text-xs leading-snug" style={{ color: "#52525b" }}>
+                Random arm movements, resting positions, reaching for objects — anything that is NOT a sign. Vary the movements each rep.
+              </p>
+
+              <button
+                onClick={() => handleRecord(NULL_KEY)}
+                disabled={
+                  !isConnected ||
+                  (listeningPhrase !== null && listeningPhrase !== NULL_KEY)
+                }
+                className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium transition-all duration-200"
+                style={{
+                  background: listeningPhrase === NULL_KEY
+                    ? "rgba(251,146,60,0.2)"
+                    : "rgba(255,255,255,0.06)",
+                  border: listeningPhrase === NULL_KEY
+                    ? "1px solid rgba(251,146,60,0.4)"
+                    : "1px solid rgba(255,255,255,0.1)",
+                  color: listeningPhrase === NULL_KEY ? "#fb923c" : "#a1a1aa",
+                  cursor: (!isConnected || (listeningPhrase !== null && listeningPhrase !== NULL_KEY))
+                    ? "not-allowed"
+                    : "pointer",
+                  opacity: (!isConnected || (listeningPhrase !== null && listeningPhrase !== NULL_KEY)) ? 0.5 : 1,
+                }}
+              >
+                {listeningPhrase === NULL_KEY ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Listening...
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-3 h-3" />
+                    {nullCount === 0
+                      ? "Record movement"
+                      : `Record movement (${nullCount}/${NULL_REPS_NEEDED})`}
+                  </>
+                )}
+              </button>
+            </div>
+
             {/* Train model button — shown when all phrases have ≥ REPS_TO_TRAIN reps */}
             {canTrainModel && (
               <div
@@ -502,10 +620,10 @@ export default function TrainPage() {
                       className="text-sm font-medium"
                       style={{ color: "#22c55e" }}
                     >
-                      All phrases have enough reps
+                      All phrases + null class ready
                     </p>
                     <p className="text-xs mt-0.5" style={{ color: "#52525b" }}>
-                      Click below to train your personal DTW phrase model
+                      Click below to train your personal model
                     </p>
                   </div>
                 </div>

@@ -15,7 +15,8 @@ const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
 interface SessionRecord {
   id: string;
   date: string;
-  sentences: string[];
+  phrases?: string[];
+  sentences?: string[];
   duration: number;
 }
 
@@ -128,7 +129,7 @@ export default function HomePage() {
               <div key={s.id} className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium" style={{ color: TEXT }}>
-                    {s.sentences[0] || "Session"}
+                    {(s.phrases ?? s.sentences ?? [])[0] || "Session"}
                   </p>
                   <p className="text-xs" style={{ color: TEXT3 }}>{timeAgo(s.date)}</p>
                 </div>

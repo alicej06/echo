@@ -63,7 +63,7 @@ from scripts.train_dyfav import (
     train_from_recordings, train_for_user, load_user_model,
 )
 from scripts.train_dtw import (
-    PHRASES, TRAIN_REPS as DTW_TRAIN_REPS,
+    PHRASES, TRAIN_REPS as DTW_TRAIN_REPS, NULL_CLASS,
     predict_dtw, train_dtw, save_dtw_model, load_dtw_model,
     save_phrase_recordings, load_phrase_recordings,
 )
@@ -212,6 +212,24 @@ LLM_SYSTEM = (
     "Output only the reconstructed English. No quotes, no explanation."
 )
 
+# Phrase-level LLM: receives ASL sign phrases (e.g. ["my", "name", "echo"])
+# and reconstructs them into a natural English sentence.
+LLM_PHRASE_SYSTEM = (
+    "You are an ASL-to-English interpreter. "
+    "You receive a sequence of ASL signs as individual words or short phrases. "
+    "ASL omits words like 'is', 'are', 'the', 'a' — your job is to reconstruct "
+    "natural spoken English. "
+    "Examples: ['my', 'name', 'echo'] → 'My name is Echo.' "
+    "['how are you'] → 'How are you?' "
+    "['thank you', 'nice to meet you'] → 'Thank you, nice to meet you.' "
+    "['hello', 'my', 'name', 'echo'] → 'Hello! My name is Echo.' "
+    "Output ONLY the English sentence. No quotes, no explanation. "
+    "If the input is a single complete phrase, return it naturally capitalized."
+)
+
+LLM_PHRASE_PAUSE_S  = 2.5  # seconds of silence before constructing a sentence
+LLM_PHRASE_MAX      = 8    # also flush if this many phrases are buffered
+
 
 def _try_anthropic(text: str) -> str | None:
     if not ANTHROPIC_API_KEY:
@@ -272,6 +290,65 @@ async def llm_translate(letters: list[str]) -> str:
         or _try_ollama_cloud(text)
         or _try_ollama_local(text)
         or "[no LLM — set ANTHROPIC_API_KEY or install Ollama]"
+    )
+
+
+def _llm_call_with_system(system: str, text: str) -> str | None:
+    """Call LLM backends in priority order with a custom system prompt."""
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=128,
+                system=system,
+                messages=[{"role": "user", "content": text}],
+            )
+            return msg.content[0].text.strip()
+        except Exception as exc:
+            print(f"\n  {clr('[anthropic]', YELLOW)} {exc}")
+
+    if OLLAMA_API_KEY:
+        try:
+            payload = json.dumps({
+                "model": OLLAMA_CLOUD_MODEL, "stream": False,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user",   "content": text}],
+            }).encode()
+            req = urllib.request.Request(
+                OLLAMA_CLOUD_URL, data=payload,
+                headers={"Authorization": f"Bearer {OLLAMA_API_KEY}",
+                         "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read())["message"]["content"].strip()
+        except Exception:
+            pass
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key="ollama", base_url=OLLAMA_LOCAL_URL)
+        resp = client.chat.completions.create(
+            model=OLLAMA_LOCAL_MODEL, max_tokens=128,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user",   "content": text}],
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        pass
+
+    return None
+
+
+async def llm_phrase_translate(phrases: list[str]) -> str:
+    """You are an ASL to English professional translator. Convert a sequence of ASL sign phrases into a natural English sentence. 
+    If you see "echo", you can assume that is a name unless with reasonable doubt. For example, if you get 'my', 'name', 'echo', output 'My name is echo'. 
+    Use proper punctuation and capitalization. If the input is a single complete phrase, return it naturally capitalized. Output only the English sentence, no explanation."""
+    text = ", ".join(phrases)
+    return (
+        _llm_call_with_system(LLM_PHRASE_SYSTEM, text)
+        or ", ".join(p.capitalize() for p in phrases)  # graceful fallback: just join
     )
 
 # ---------------------------------------------------------------------------
@@ -364,6 +441,11 @@ def _make_session(
     last_letter_ts  = [0.0]
     llm_running     = [False]
     mode            = ["recognition"]  # "recognition" | "training"
+
+    # Phrase-level LLM accumulation
+    pending_phrases:  list[str] = []
+    last_phrase_ts    = [0.0]
+    phrase_llm_running = [False]
 
     # Gesture stability state
     stable_letter   = [None]   # letter currently being held
@@ -510,6 +592,22 @@ def _make_session(
                     await _ws_broadcast({"type": "error", "message": f"Phrase recording timed out — no gesture detected"})
             asyncio.create_task(_phrase_watchdog(phrase))
 
+        elif mtype == "train_null":
+            if ws_train_phrase[0] or collecting[0]:
+                await _ws_broadcast({"type": "error", "message": "Already recording"})
+                return
+            ws_train_phrase[0] = NULL_CLASS
+            mode[0] = f"waiting: null"
+            print(f"\n  {clr('train', CYAN)}  ready — do a random arm movement (not a sign)")
+
+            async def _null_watchdog() -> None:
+                await asyncio.sleep(12.0)
+                if ws_train_phrase[0] == NULL_CLASS:
+                    ws_train_phrase[0] = None
+                    mode[0] = "recognition"
+                    await _ws_broadcast({"type": "error", "message": "Null recording timed out"})
+            asyncio.create_task(_null_watchdog())
+
         elif mtype == "train_phrases_model":
             # Merge in-memory recordings with any previously persisted ones
             disk_recs = load_phrase_recordings(user_id)
@@ -556,6 +654,13 @@ def _make_session(
             lambda: predict_dtw(dtw_model[0], raw_gesture, return_scores=True),
         )
         ws_thinking[0] = False
+        if phrase is None:
+            # Null class — suppress output silently
+            print(f"\r  {clr('--', DIM)}  [null / background]  ({confidence:.0%})          \n",
+                  flush=True)
+            if ws_port:
+                await _ws_broadcast({"type": "gesture_state", "state": "idle", "rms": 0.0})
+            return
         if confidence < DTW_CONFIDENCE_THRESH:
             print(f"\r  {clr('?', DIM)}  {phrase}  ({confidence:.0%}) — below threshold          \n",
                   flush=True)
@@ -570,6 +675,9 @@ def _make_session(
                 "confidence": round(confidence, 4),
                 "scores":     {p: round(d, 3) for p, d in scores.items()},
             })
+        # Feed into phrase-level LLM accumulator
+        pending_phrases.append(phrase)
+        last_phrase_ts[0] = time.monotonic()
 
     _ws_message_handler = _handle_ws_message
 
@@ -777,6 +885,39 @@ def _make_session(
             if ws_port:
                 await _ws_broadcast({"type": "sentence", "text": sentence[0]})
 
+    async def _phrase_llm_loop() -> None:
+        """
+        Accumulate recognised phrase tokens and flush them to the LLM when
+        the user pauses (LLM_PHRASE_PAUSE_S silence) or the buffer is full.
+
+        E.g. ["my", "name", "echo"] → "My name is Echo."
+        """
+        while True:
+            await asyncio.sleep(0.2)
+            if not use_llm or phrase_llm_running[0] or not pending_phrases:
+                continue
+            silence = time.monotonic() - last_phrase_ts[0]
+            if silence < LLM_PHRASE_PAUSE_S and len(pending_phrases) < LLM_PHRASE_MAX:
+                continue
+            to_translate = list(pending_phrases)
+            pending_phrases.clear()
+            phrase_llm_running[0] = True
+            print(f"\r  {clr('llm', VIOLET)}  constructing sentence from: {to_translate}          ",
+                  flush=True)
+            if ws_port:
+                asyncio.create_task(_ws_broadcast({"type": "sentence_building", "phrases": to_translate}))
+            phrases_str = ", ".join(to_translate)
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, _llm_call_with_system, LLM_PHRASE_SYSTEM, phrases_str
+            )
+            if not result:
+                result = " ".join(p.capitalize() for p in to_translate)
+            sentence[0] = result
+            phrase_llm_running[0] = False
+            print(f"\r  {clr('echo', BOLD + VIOLET)}  {result}          \n", flush=True)
+            if ws_port:
+                await _ws_broadcast({"type": "sentence", "text": result})
+
     async def run() -> None:
         if device_mac:
             print(f"  {clr('ble', CYAN)}  connecting to MAC {device_mac}...")
@@ -802,6 +943,7 @@ def _make_session(
         print()
 
         try:
+            asyncio.create_task(_phrase_llm_loop())
             await client.start()
             while True:
                 await asyncio.sleep(1)
