@@ -15,8 +15,11 @@ type FilterTab = "all" | "favorites" | "translations" | "chats";
 interface SessionRecord {
   id: string;
   date: string;
-  letters: string[];
-  sentences: string[];
+  // legacy fields
+  letters?: string[];
+  sentences?: string[];
+  // current field (saved by translate page)
+  phrases?: string[];
   duration: number;
   type?: "translation" | "conversation";
   favorited?: boolean;
@@ -59,7 +62,8 @@ export default function HistoryPage() {
   const filtered = [...sessions]
     .reverse()
     .filter((s) => {
-      const text = (s.sentences.join(" ") + s.letters.join("")).toLowerCase();
+      const words = [...(s.phrases ?? s.sentences ?? []), ...(s.letters ?? [])];
+      const text = words.join(" ").toLowerCase();
       if (search && !text.includes(search.toLowerCase())) return false;
       if (filter === "favorites" && !favorites.has(s.id)) return false;
       if (filter === "translations" && s.type === "conversation") return false;
@@ -135,8 +139,9 @@ export default function HistoryPage() {
             {filtered.map((s) => {
               const isConversation = s.type === "conversation";
               const isFav = favorites.has(s.id);
-              const preview = s.sentences[0] || s.letters.slice(0, 20).join("") || "Session";
-              const subtext = s.sentences[1] || (s.sentences.length > 1 ? s.sentences[1] : null);
+              const allWords = s.phrases ?? s.sentences ?? [];
+              const preview = allWords[0] || (s.letters ?? []).slice(0, 20).join("") || "Session";
+              const subtext = allWords[1] ?? null;
 
               return (
                 <div
