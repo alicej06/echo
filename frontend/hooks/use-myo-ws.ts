@@ -18,6 +18,15 @@ export interface PhraseTrainStatus {
 
 export type GestureState = "idle" | "capturing" | "thinking";
 
+export interface TeachState {
+  collecting: boolean;
+  word: string;
+  count: number;
+  emg: number[];         // last raw EMG frame (8 values)
+  modelReady: boolean;
+  cvAccuracy: number | null;
+}
+
 export interface MyoState {
   status: MyoStatus;
   currentLetter: string;
@@ -43,6 +52,8 @@ export interface MyoState {
   phraseTrainStatus: PhraseTrainStatus;
   dtwModelReady: boolean;
   dtwCvAccuracy: number | null;
+  // Teach Echo
+  teach: TeachState;
 }
 
 const DEMO_LETTERS = "HELLO WORLD ECHO ASL".split("").filter((c) => c !== " ");
@@ -98,6 +109,7 @@ export function useMyoWs() {
     phraseTrainStatus: {},
     dtwModelReady: false,
     dtwCvAccuracy: null,
+    teach: { collecting: false, word: "", count: 0, emg: Array(8).fill(0), modelReady: false, cvAccuracy: null },
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -282,6 +294,23 @@ export function useMyoWs() {
               dtwModelReady: true,
               dtwCvAccuracy: cvAccuracy,
             }));
+          } else if (msg.type === "teach_emg") {
+            const emg = Array.isArray(msg.emg) ? (msg.emg as number[]) : Array(8).fill(0);
+            setState((s) => ({ ...s, teach: { ...s.teach, emg } }));
+          } else if (msg.type === "teach_ack") {
+            const word  = String(msg.word ?? "");
+            const count = Number(msg.count ?? 0);
+            setState((s) => ({
+              ...s,
+              teach: { ...s.teach, collecting: false, word, count, modelReady: false },
+            }));
+          } else if (msg.type === "teach_model_ready") {
+            const word      = String(msg.word ?? "");
+            const cvAcc     = msg.cv_accuracy != null ? Number(msg.cv_accuracy) : null;
+            setState((s) => ({
+              ...s,
+              teach: { ...s.teach, modelReady: true, word, cvAccuracy: cvAcc },
+            }));
           }
         } catch {
           // ignore malformed frames
@@ -333,6 +362,15 @@ export function useMyoWs() {
     send({ type: "train_null" });
   }, [send]);
 
+  const teachRecord = useCallback((word: string) => {
+    setState((s) => ({ ...s, teach: { ...s.teach, collecting: true, word } }));
+    send({ type: "teach_record", word });
+  }, [send]);
+
+  const teachTrain = useCallback((word: string) => {
+    send({ type: "teach_train", word });
+  }, [send]);
+
   const trainPhrasesModel = useCallback(() => {
     send({ type: "train_phrases_model" });
   }, [send]);
@@ -375,6 +413,8 @@ export function useMyoWs() {
     trainPhrase,
     trainNull,
     trainPhrasesModel,
+    teachRecord,
+    teachTrain,
     sendCorrection,
   };
 }

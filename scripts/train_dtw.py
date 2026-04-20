@@ -44,6 +44,8 @@ PHRASES = [
     "nice to meet you",
     "how are you",
     "thank you",
+    "great",
+    "what's your name",
 ]
 
 # Internal label for the null/background class.
@@ -51,7 +53,7 @@ PHRASES = [
 # that is NOT a sign.  When predicted, the system stays silent instead of
 # broadcasting a phrase.
 NULL_CLASS = "_null_"
-NULL_MIN_REPS = 5   # minimum null recordings before the class is included
+NULL_MIN_REPS = 30  # minimum null recordings before the class is included
 
 EMG_COLS      = slice(0,  8)   # 8 EMG channels
 IMU_COLS      = slice(11, 17)  # gyro[x,y,z] + accel[x,y,z]  (skip quaternion cols 8-10)

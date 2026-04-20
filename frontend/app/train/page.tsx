@@ -19,13 +19,15 @@ const PHRASES = [
   "nice to meet you",
   "how are you",
   "thank you",
+  "great",
+  "what's your name",
 ] as const;
 
 const REPS_NEEDED = 5;
 const REPS_TO_TRAIN = 3;
 const NULL_KEY = "_null_";
-const NULL_REPS_NEEDED = 10;
-const NULL_REPS_TO_TRAIN = 5;
+const NULL_REPS_NEEDED = 35;
+const NULL_REPS_TO_TRAIN = 30;
 
 const PHRASE_HINTS: Record<string, string> = {
   hello: "Wave hand side to side",
@@ -35,6 +37,8 @@ const PHRASE_HINTS: Record<string, string> = {
   "nice to meet you": "Flat hand slides off other palm",
   "how are you": "Bent fingers roll forward, then point",
   "thank you": "Flat hand from chin forward",
+  great: "Thumbs up or fist push forward",
+  "what's your name": "WH sign → point at person → name sign",
 };
 
 function PhraseCard({
@@ -119,7 +123,7 @@ function PhraseCard({
       </div>
 
       {/* Hint */}
-      <p className="text-xs leading-snug" style={{ color: "#52525b" }}>
+      <p className="text-xs leading-snug" style={{ color: "rgba(255,255,255,0.6)" }}>
         {PHRASE_HINTS[phrase]}
       </p>
 
@@ -289,7 +293,7 @@ export default function TrainPage() {
   return (
     <main
       className="min-h-screen pt-16 pb-20 px-4"
-      style={{ backgroundColor: "#0a0a0a" }}
+      style={{ background: "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)" }}
     >
       <div className="max-w-2xl mx-auto">
         {/* Header */}
@@ -297,7 +301,7 @@ export default function TrainPage() {
           <h1 className="text-2xl font-bold text-white tracking-tight">
             Training
           </h1>
-          <p className="text-sm mt-1" style={{ color: "#52525b" }}>
+          <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.7)" }}>
             Record 5 samples of each phrase to build your personal model
           </p>
         </div>
@@ -369,7 +373,7 @@ export default function TrainPage() {
                 <p className="text-sm font-medium text-white">
                   Connect to Echo server
                 </p>
-                <p className="text-xs mt-0.5" style={{ color: "#52525b" }}>
+                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.6)" }}>
                   Start the server then connect
                 </p>
               </div>
@@ -383,7 +387,7 @@ export default function TrainPage() {
                 color: "#22c55e",
               }}
             >
-              <span style={{ color: "#52525b" }}>$ </span>
+              <span style={{ color: "rgba(255,255,255,0.6)" }}>$ </span>
               python scripts/live_translate.py --user alice --ws-port 8765
             </div>
 
@@ -427,8 +431,8 @@ export default function TrainPage() {
             <div
               className="rounded-2xl p-5 flex items-center justify-between flex-wrap gap-4"
               style={{
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
+                background: "rgba(255,255,255,0.15)",
+                border: "1px solid rgba(255,255,255,0.3)",
               }}
             >
               <div>
@@ -436,12 +440,12 @@ export default function TrainPage() {
                   {totalComplete}
                   <span
                     className="text-base font-normal"
-                    style={{ color: "#52525b" }}
+                    style={{ color: "rgba(255,255,255,0.6)" }}
                   >
                     {" "}/ {PHRASES.length} phrases complete
                   </span>
                 </p>
-                <p className="text-xs mt-1" style={{ color: "#52525b" }}>
+                <p className="text-xs mt-1" style={{ color: "rgba(255,255,255,0.6)" }}>
                   {canTrainModel
                     ? "All reps recorded — ready to train!"
                     : nullCount < NULL_REPS_TO_TRAIN
@@ -525,7 +529,7 @@ export default function TrainPage() {
                   >
                     Null / background
                   </span>
-                  <span className="text-xs mt-0.5 block" style={{ color: "#52525b" }}>
+                  <span className="text-xs mt-0.5 block" style={{ color: "rgba(255,255,255,0.6)" }}>
                     Required — prevents false positives
                   </span>
                 </div>
@@ -560,8 +564,8 @@ export default function TrainPage() {
                 />
               </div>
 
-              <p className="text-xs leading-snug" style={{ color: "#52525b" }}>
-                Random arm movements, resting positions, reaching for objects — anything that is NOT a sign. Vary the movements each rep.
+              <p className="text-xs leading-snug" style={{ color: "rgba(255,255,255,0.6)" }}>
+                Vary each rep: arm resting at side, reaching for something, casual hand wave, pointing, transitions between signs, natural talking gestures. The more variety the better.
               </p>
 
               <button
@@ -622,7 +626,7 @@ export default function TrainPage() {
                     >
                       All phrases + null class ready
                     </p>
-                    <p className="text-xs mt-0.5" style={{ color: "#52525b" }}>
+                    <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.6)" }}>
                       Click below to train your personal model
                     </p>
                   </div>

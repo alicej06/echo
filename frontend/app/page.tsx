@@ -26,7 +26,7 @@ export default function WelcomePage() {
 
         <div className="flex flex-col gap-3 w-full">
           <Link
-            href="/home"
+            href="/onboarding"
             className="block text-center"
             style={{
               padding: "15px",
