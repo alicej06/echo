@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="antialiased" style={{ backgroundColor: "#F0EFF8", minHeight: "100vh" }}>
+      <body className="antialiased" style={{ background: "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)", minHeight: "100vh" }}>
         {children}
         <BottomNav />
       </body>

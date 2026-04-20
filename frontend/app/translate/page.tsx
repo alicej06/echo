@@ -3,8 +3,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Square, RotateCcw, Trash2 } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 
-const BG = "#F0EFF8";
-const CARD = "#FFFFFF";
+const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
+const CARD = "rgba(255,255,255,0.82)";
 const PURPLE = "#7C6FE0";
 const PURPLE_LIGHT = "rgba(124,111,224,0.12)";
 const TEXT = "#1C1C1E";
@@ -12,7 +12,7 @@ const TEXT2 = "#6C6C70";
 const TEXT3 = "#8E8E93";
 const GREEN = "#34C759";
 const AMBER = "#F59E0B";
-const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+const SHADOW = "0 2px 12px rgba(80,0,150,0.1)";
 
 // Must match backend constants
 const DTW_ONSET_RMS = 18.0;
@@ -106,13 +106,13 @@ export default function TranslatePage() {
   const capturePct = Math.min(gestureFrames / MAX_GESTURE_FRAMES, 1);
 
   return (
-    <main className="min-h-screen pb-24 px-4" style={{ backgroundColor: BG }}>
+    <main className="min-h-screen pb-24 px-4" style={{ background: BG }}>
       <div className="max-w-sm mx-auto pt-12">
 
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold" style={{ color: TEXT }}>Live Translation</h1>
-          <p className="text-sm mt-1" style={{ color: TEXT2 }}>ASL gestures → spoken words</p>
+          <h1 className="text-2xl font-bold" style={{ color: "#fff" }}>Live Translation</h1>
+          <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.8)" }}>ASL gestures → spoken words</p>
         </div>
 
         {/* ── Status + gesture state card ── */}
