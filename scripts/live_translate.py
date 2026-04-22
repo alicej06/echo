@@ -734,11 +734,13 @@ def _make_session(
             if not word:
                 await _ws_broadcast({"type": "error", "message": "No word specified"})
                 return
-            # Merge disk + in-memory recordings
+            # Disk is already up to date (each rep merges before saving).
+            # Using disk as the single source of truth avoids double-counting
+            # in-memory recs that were already flushed to disk.
             disk_recs = load_phrase_recordings(user_id)
-            merged: dict[str, list] = {**disk_recs}
-            for p, recs in phrase_recordings.items():
-                merged.setdefault(p, []).extend(recs)
+            merged: dict[str, list] = dict(disk_recs)
+            print(f"  {clr('teach', VIOLET)}  training with {sum(len(v) for v in merged.values())} "
+                  f"total reps across {len(merged)} gesture(s)")
             if len(merged.get(word, [])) < MIN_REPS:
                 await _ws_broadcast({
                     "type": "error",
@@ -865,9 +867,15 @@ def _make_session(
                         teach_buf.clear()
                         mode[0] = "recognition"
                         phrase_recordings.setdefault(word, []).append(raw_t)
-                        save_phrase_recordings(phrase_recordings, user_id)
+                        # BUG FIX: merge with existing disk recordings before saving so
+                        # previously taught words are not overwritten.
+                        _disk = load_phrase_recordings(user_id)
+                        _disk[word] = phrase_recordings[word]   # update only this word
+                        save_phrase_recordings(_disk, user_id)
                         count = len(phrase_recordings[word])
-                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved")
+                        total_words = len(_disk)
+                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved  "
+                              f"(library has {total_words} gesture(s) on disk)")
                         if ws_port:
                             asyncio.create_task(_ws_broadcast({
                                 "type": "teach_ack",
