@@ -1,16 +1,17 @@
 "use client";
 import { useState, useEffect } from "react";
-import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate } from "lucide-react";
+import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate, Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
 
-const BG = "#F0EFF8";
-const CARD = "#FFFFFF";
+const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
+const CARD = "rgba(255,255,255,0.82)";
 const PURPLE = "#7C6FE0";
 const PURPLE_LIGHT = "rgba(124,111,224,0.12)";
 const GREEN = "#34C759";
 const TEXT = "#1C1C1E";
 const TEXT2 = "#6C6C70";
 const TEXT3 = "#8E8E93";
-const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+const SHADOW = "0 2px 12px rgba(80,0,150,0.1)";
 
 interface Prefs {
   voiceRate: number;
@@ -34,6 +35,12 @@ const DEFAULT_PREFS: Prefs = {
   selectedVoice: "Samantha",
 };
 
+const KNOWN_PHRASES = [
+  "hello", "my", "name", "echo",
+  "nice to meet you", "how are you", "thank you",
+  "great", "what's your name",
+];
+
 const VOICES = [
   { name: "Samantha", desc: "Natural, friendly" },
   { name: "Karen", desc: "Clear, professional" },
@@ -42,7 +49,7 @@ const VOICES = [
 
 function SectionLabel({ label }: { label: string }) {
   return (
-    <p className="text-xs font-semibold uppercase tracking-wider mb-3 mt-6" style={{ color: TEXT3 }}>
+    <p className="text-xs font-semibold uppercase tracking-wider mb-3 mt-6" style={{ color: "rgba(255,255,255,0.65)" }}>
       {label}
     </p>
   );
@@ -73,6 +80,7 @@ function SliderRow({
 }
 
 export default function ProfilePage() {
+  const router = useRouter();
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
 
   useEffect(() => {
@@ -91,16 +99,16 @@ export default function ProfilePage() {
   };
 
   return (
-    <main className="min-h-screen pb-24 px-4" style={{ backgroundColor: BG }}>
+    <main className="min-h-screen pb-24 px-4" style={{ background: BG }}>
       <div className="max-w-sm mx-auto pt-12">
         {/* Header */}
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: PURPLE_LIGHT }}>
-            <User size={22} style={{ color: PURPLE }} />
+          <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.35)" }}>
+            <User size={22} style={{ color: "#fff" }} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold" style={{ color: TEXT }}>Settings</h1>
-            <p className="text-sm" style={{ color: TEXT2 }}>Customize your experience</p>
+            <h1 className="text-2xl font-bold" style={{ color: "#fff" }}>Settings</h1>
+            <p className="text-sm" style={{ color: "rgba(255,255,255,0.8)" }}>Customize your experience</p>
           </div>
         </div>
 
@@ -243,6 +251,33 @@ export default function ProfilePage() {
               onChange={(v) => update("vibrationIntensity", v)}
             />
           )}
+        </div>
+
+        {/* PERSONALIZE */}
+        <SectionLabel label="Personalize Gestures" />
+        <div className="rounded-2xl p-4 mb-1" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
+          <p className="text-xs mb-4" style={{ color: TEXT2 }}>
+            Add more reps for any word to improve recognition accuracy for your signing style.
+          </p>
+          <div className="flex flex-col gap-2">
+            {KNOWN_PHRASES.map((phrase) => (
+              <div
+                key={phrase}
+                className="flex items-center justify-between py-2 px-1"
+                style={{ borderBottom: "1px solid rgba(0,0,0,0.05)" }}
+              >
+                <span className="text-sm font-medium capitalize" style={{ color: TEXT }}>{phrase}</span>
+                <button
+                  onClick={() => router.push(`/teach?word=${encodeURIComponent(phrase)}&calibrate=true`)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl cursor-pointer text-xs font-semibold"
+                  style={{ backgroundColor: PURPLE_LIGHT, color: PURPLE }}
+                >
+                  <Plus size={12} />
+                  Add reps
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* MORE */}
