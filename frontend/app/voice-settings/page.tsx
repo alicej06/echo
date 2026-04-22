@@ -16,8 +16,8 @@ const ON_BG2 = "rgba(255,255,255,0.8)";
 const ON_BG3 = "rgba(255,255,255,0.55)";
 
 const API_KEY      = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
-const RACHEL_ID    = "21m00Tcm4TlvDq8ikWAM";
-const MIN_RECORD_S = 30; // ElevenLabs minimum for cloning
+const MIN_RECORD_S = 30;  // ElevenLabs minimum for cloning
+const MAX_RECORD_S = 120; // auto-stop safety net (2 minutes)
 
 type Tab   = "clone" | "design";
 type Stage = "idle" | "recording" | "recorded" | "loading" | "preview" | "saved" | "error";
@@ -69,6 +69,16 @@ function CloneTab() {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
 
+  // Stable stop function stored in a ref so the auto-stop timer can call it
+  const doStop = useCallback(() => {
+    stopTimer();
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();   // triggers onstop → sets stage to "recorded"
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const doStopRef = useRef(doStop);
+  doStopRef.current = doStop;
+
   const startRecording = useCallback(async () => {
     setError("");
     try {
@@ -95,7 +105,13 @@ function CloneTab() {
       rec.start(250);
       setStage("recording");
 
-      timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+      let secs = 0;
+      timerRef.current = setInterval(() => {
+        secs += 1;
+        setElapsed(secs);
+        // Auto-stop at MAX_RECORD_S
+        if (secs >= MAX_RECORD_S) doStopRef.current();
+      }, 1000);
     } catch {
       setError("Microphone access denied. Allow mic in browser settings.");
       setStage("error");
@@ -103,8 +119,7 @@ function CloneTab() {
   }, []);
 
   const stopRecording = useCallback(() => {
-    stopTimer();
-    recorderRef.current?.stop();
+    doStopRef.current();
   }, []);
 
   const submitClone = useCallback(async () => {
@@ -220,6 +235,19 @@ function CloneTab() {
                 {hasEnough ? "✓ Enough to clone — keep going for better quality" : `${MIN_RECORD_S - elapsed}s more needed`}
               </p>
             </div>
+          )}
+
+          {stage === "recording" && (
+            <button
+              onClick={stopRecording}
+              className="w-full rounded-2xl py-3 text-sm font-semibold cursor-pointer"
+              style={{
+                backgroundColor: "rgba(255,59,48,0.18)",
+                color: "#FF3B30",
+                border: "1px solid rgba(255,59,48,0.35)",
+              }}>
+              Stop Recording
+            </button>
           )}
 
           {stage === "idle" && (
@@ -496,11 +524,6 @@ export default function VoiceSettingsPage() {
     } catch { /* ignore */ }
   }, []);
 
-  const resetToDefault = () => {
-    saveVoiceToProfile(RACHEL_ID, "Rachel");
-    setCurrentVoice("Rachel (default)");
-  };
-
   return (
     <main className="min-h-screen pb-24 px-4" style={{ background: BG }}>
       <div className="max-w-sm mx-auto pt-12">
@@ -541,15 +564,6 @@ export default function VoiceSettingsPage() {
         {/* Tab content */}
         {tab === "clone" ? <CloneTab /> : <DesignTab />}
 
-        {/* Reset to default */}
-        <div className="mt-8 text-center">
-          <button
-            onClick={resetToDefault}
-            className="text-sm cursor-pointer underline"
-            style={{ color: ON_BG3 }}>
-            Reset to default (Rachel)
-          </button>
-        </div>
       </div>
     </main>
   );
