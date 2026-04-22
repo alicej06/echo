@@ -1,10 +1,22 @@
 "use client";
 import { useState, useRef, useCallback, useEffect } from "react";
 
-// Requires NEXT_PUBLIC_ELEVENLABS_API_KEY and NEXT_PUBLIC_ELEVENLABS_VOICE_ID in .env.local
+// Requires NEXT_PUBLIC_ELEVENLABS_API_KEY in .env.local
+// Voice ID is read dynamically from localStorage (maia_prefs.selectedVoiceId) so
+// the user's choice on the Profile page takes effect immediately.
 const API_KEY = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
-const VOICE_ID =
-  process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM"; // Rachel
+const FALLBACK_VOICE_ID =
+  process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID ?? "l4Coq6695JDX9xtLqXDE"; // Lauren
+
+function getVoiceId(): string {
+  if (typeof window === "undefined") return FALLBACK_VOICE_ID;
+  try {
+    const prefs = JSON.parse(localStorage.getItem("maia_prefs") ?? "{}") as Record<string, unknown>;
+    return (prefs.selectedVoiceId as string) ?? FALLBACK_VOICE_ID;
+  } catch {
+    return FALLBACK_VOICE_ID;
+  }
+}
 
 export interface UseElevenLabsReturn {
   speak: (text: string) => Promise<void>;
@@ -44,7 +56,7 @@ export function useElevenLabs(): UseElevenLabsReturn {
         setIsSpeaking(true);
 
         const res = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${getVoiceId()}`,
           {
             method: "POST",
             headers: {

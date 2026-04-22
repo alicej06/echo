@@ -22,6 +22,7 @@ interface Prefs {
   debounceMsWindow: number;
   modelFile: string;
   selectedVoice: string;
+  selectedVoiceId: string;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -32,7 +33,8 @@ const DEFAULT_PREFS: Prefs = {
   confidenceThreshold: 0.65,
   debounceMsWindow: 300,
   modelFile: "models/lstm_asl.pt",
-  selectedVoice: "Samantha",
+  selectedVoice: "Lauren",
+  selectedVoiceId: "l4Coq6695JDX9xtLqXDE",
 };
 
 const KNOWN_PHRASES = [
@@ -42,9 +44,9 @@ const KNOWN_PHRASES = [
 ];
 
 const VOICES = [
-  { name: "Samantha", desc: "Natural, friendly" },
-  { name: "Karen", desc: "Clear, professional" },
-  { name: "Alex", desc: "Calm, neutral" },
+  { name: "Lauren", desc: "Warm, conversational", voiceId: "l4Coq6695JDX9xtLqXDE" },
+  { name: "Hale",   desc: "Clear, expressive",    voiceId: "wWWn96OtTHu1sn8SRGEr" },
+  { name: "Posh Josh", desc: "Confident, polished", voiceId: "NXaTw4ifg0LAguvKuIwZ" },
 ];
 
 function SectionLabel({ label }: { label: string }) {
@@ -162,10 +164,13 @@ export default function ProfilePage() {
         <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
           <p className="text-sm font-medium mb-3" style={{ color: TEXT }}>Select Voice</p>
           <div className="flex flex-col gap-2 mb-4">
-            {VOICES.map(({ name, desc }) => (
+            {VOICES.map(({ name, desc, voiceId }) => (
               <button
                 key={name}
-                onClick={() => update("selectedVoice", name)}
+                onClick={() => {
+                  update("selectedVoice", name);
+                  update("selectedVoiceId", voiceId);
+                }}
                 className="flex items-center justify-between p-3 rounded-xl cursor-pointer text-left"
                 style={{
                   border: prefs.selectedVoice === name
@@ -178,6 +183,9 @@ export default function ProfilePage() {
                   <p className="text-sm font-medium" style={{ color: TEXT }}>{name}</p>
                   <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{desc}</p>
                 </div>
+                {prefs.selectedVoice === name && (
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: PURPLE }} />
+                )}
               </button>
             ))}
           </div>
