@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate, Plus } from "lucide-react";
+import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate, Plus, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
@@ -189,6 +189,22 @@ export default function ProfilePage() {
               </button>
             ))}
           </div>
+
+          {/* Personalize voice entry point */}
+          <button
+            onClick={() => router.push("/voice-settings")}
+            className="w-full flex items-center justify-between p-3 rounded-xl cursor-pointer mb-4"
+            style={{ backgroundColor: PURPLE_LIGHT, border: `1px solid ${PURPLE}22` }}
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles size={15} style={{ color: PURPLE }} />
+              <div className="text-left">
+                <p className="text-sm font-semibold" style={{ color: PURPLE }}>Personalize your voice</p>
+                <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>Clone your voice or design one with AI</p>
+              </div>
+            </div>
+            <ChevronRight size={15} style={{ color: PURPLE }} />
+          </button>
 
           <SliderRow
             label="Speed"
