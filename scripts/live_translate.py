@@ -63,7 +63,7 @@ from scripts.train_dyfav import (
     train_from_recordings, train_for_user, load_user_model,
 )
 from scripts.train_dtw import (
-    PHRASES, TRAIN_REPS as DTW_TRAIN_REPS, NULL_CLASS,
+    PHRASES, TRAIN_REPS as DTW_TRAIN_REPS, MIN_REPS, NULL_CLASS, NULL_MIN_REPS,
     predict_dtw, train_dtw, save_dtw_model, load_dtw_model,
     save_phrase_recordings, load_phrase_recordings,
 )
@@ -95,6 +95,7 @@ DTW_MIN_QUIET         = 60    # consecutive quiet samples before gesture ends (3
 DTW_MIN_GESTURE       = 40    # minimum gesture length in samples (200ms)
 DTW_MAX_GESTURE       = 1200  # maximum gesture buffer (6s)
 DTW_CONFIDENCE_THRESH = 0.20  # minimum confidence to emit a phrase
+TEACH_SAMPLES         = 400   # fixed-length recording for Teach Echo (2s at 200Hz)
 
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 OLLAMA_API_KEY     = os.environ.get("OLLAMA_API_KEY", "")
@@ -223,6 +224,8 @@ LLM_PHRASE_SYSTEM = (
     "['how are you'] → 'How are you?' "
     "['thank you', 'nice to meet you'] → 'Thank you, nice to meet you.' "
     "['hello', 'my', 'name', 'echo'] → 'Hello! My name is Echo.' "
+    "['great'] → 'Great!' "
+    "['what\\'s your name'] → 'What\\'s your name?' "
     "Output ONLY the English sentence. No quotes, no explanation. "
     "If the input is a single complete phrase, return it naturally capitalized."
 )
@@ -341,14 +344,73 @@ def _llm_call_with_system(system: str, text: str) -> str | None:
     return None
 
 
+_COMPLETE_PHRASES = {
+    "how are you", "nice to meet you", "thank you",
+    "what's your name", "great", "hello",
+}
+_QUESTION_PHRASES = {"how are you", "what's your name"}
+
+def _phrase_ending(p: str) -> str:
+    if p in _QUESTION_PHRASES:
+        return "?"
+    if p in ("hello", "great"):
+        return "!"
+    return "."
+
+def _rule_based_translate(phrases: list[str]) -> str | None:
+    """
+    Fast, deterministic ASL→English reordering for the known vocabulary.
+    Returns None if no rule matches (falls through to LLM).
+    """
+    seq = [p.lower().strip() for p in phrases]
+    n = len(seq)
+
+    # Single known complete phrase — just capitalise
+    if n == 1:
+        p = seq[0]
+        if p in _COMPLETE_PHRASES:
+            return p.capitalize() + _phrase_ending(p)
+        if p == "echo":
+            return "Echo."
+        return p.capitalize() + "."
+
+    # "my name echo" / "my name is echo"
+    if "my" in seq and "name" in seq and "echo" in seq:
+        greeting = "Hello! " if "hello" in seq else ""
+        return f"{greeting}My name is Echo."
+
+    # greeting + complete phrase combos
+    parts = []
+    if seq[0] == "hello":
+        parts.append("Hello!")
+        seq = seq[1:]
+    for p in seq:
+        if p in _COMPLETE_PHRASES:
+            parts.append(p.capitalize() + _phrase_ending(p))
+        elif p == "echo":
+            parts.append("Echo.")
+        elif p == "my":
+            parts.append("my")
+        elif p == "name":
+            parts.append("name")
+        else:
+            parts.append(p.capitalize() + ".")
+    if parts:
+        return " ".join(parts)
+
+    return None
+
+
 async def llm_phrase_translate(phrases: list[str]) -> str:
-    """You are an ASL to English professional translator. Convert a sequence of ASL sign phrases into a natural English sentence. 
-    If you see "echo", you can assume that is a name unless with reasonable doubt. For example, if you get 'my', 'name', 'echo', output 'My name is echo'. 
-    Use proper punctuation and capitalization. If the input is a single complete phrase, return it naturally capitalized. Output only the English sentence, no explanation."""
+    # Try fast rule-based first
+    result = _rule_based_translate(phrases)
+    if result:
+        return result
+    # Fall back to LLM for unknown combos
     text = ", ".join(phrases)
     return (
         _llm_call_with_system(LLM_PHRASE_SYSTEM, text)
-        or ", ".join(p.capitalize() for p in phrases)  # graceful fallback: just join
+        or " ".join(p.capitalize() for p in phrases)
     )
 
 # ---------------------------------------------------------------------------
@@ -410,6 +472,10 @@ def _make_session(
     display_tick        = [0]   # rate-limit terminal status updates
     ws_train_phrase     = [None]   # set while waiting for a training gesture via WS
     ws_thinking         = [False]  # True while DTW inference is running
+    # Teach Echo state — fixed 2s recording for custom gestures
+    teach_collecting    = [False]
+    teach_word_ref      = [None]   # the word being taught
+    teach_buf: list     = []
 
     # Shared thread pool for DTW inference (avoid creating one per gesture)
     _dtw_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -639,6 +705,72 @@ def _make_session(
                 "cv_accuracy": round(cv_acc, 4) if cv_acc is not None else None,
             })
 
+        elif mtype == "teach_record":
+            word = str(msg.get("word", "")).strip().lower()
+            if not word:
+                await _ws_broadcast({"type": "error", "message": "Word cannot be empty"})
+                return
+            if teach_collecting[0] or collecting[0] or ws_train_phrase[0]:
+                await _ws_broadcast({"type": "error", "message": "Already recording"})
+                return
+            teach_collecting[0] = True
+            teach_word_ref[0]   = word
+            teach_buf.clear()
+            mode[0] = f"teach: {word}"
+            print(f"\n  {clr('teach', VIOLET)}  recording '{word}'  ({TEACH_SAMPLES} samples)...")
+
+            async def _teach_watchdog(w: str) -> None:
+                await asyncio.sleep(6.0)
+                if teach_collecting[0] and teach_word_ref[0] == w:
+                    teach_collecting[0] = False
+                    teach_word_ref[0]   = None
+                    teach_buf.clear()
+                    mode[0] = "recognition"
+                    await _ws_broadcast({"type": "error", "message": "Teach recording timed out"})
+            asyncio.create_task(_teach_watchdog(word))
+
+        elif mtype == "teach_train":
+            word = str(msg.get("word", "")).strip().lower()
+            if not word:
+                await _ws_broadcast({"type": "error", "message": "No word specified"})
+                return
+            # Merge disk + in-memory recordings
+            disk_recs = load_phrase_recordings(user_id)
+            merged: dict[str, list] = {**disk_recs}
+            for p, recs in phrase_recordings.items():
+                merged.setdefault(p, []).extend(recs)
+            if len(merged.get(word, [])) < MIN_REPS:
+                await _ws_broadcast({
+                    "type": "error",
+                    "message": f"Need {MIN_REPS} reps of '{word}' — have {len(merged.get(word, []))}",
+                })
+                return
+            trainable = {
+                p: v for p, v in merged.items()
+                if len(v) >= (NULL_MIN_REPS if p == NULL_CLASS else MIN_REPS)
+            }
+            if len(trainable) < 2:
+                await _ws_broadcast({
+                    "type": "error",
+                    "message": "Need at least 2 gesture types trained before adding a new one",
+                })
+                return
+            print(f"\n  {clr('teach', VIOLET)}  training model with new gesture '{word}'...")
+            model = await asyncio.get_running_loop().run_in_executor(_dtw_executor, train_dtw, trainable)
+            dtw_model[0] = model
+            save_dtw_model(model, user_id)
+            save_phrase_recordings(merged, user_id)
+            phrase_recordings.clear()
+            mode[0] = "recognition"
+            cv_acc = model.get("cv_acc")
+            print(f"  {clr('teach', GREEN)}  model updated — '{word}' added"
+                  + (f"  cv_acc={cv_acc:.1%}" if cv_acc else ""))
+            await _ws_broadcast({
+                "type": "teach_model_ready",
+                "word": word,
+                "cv_accuracy": round(cv_acc, 4) if cv_acc is not None else None,
+            })
+
         elif mtype == "correction":
             letter = str(msg.get("letter", "")).lower()
             print(f"\n  {clr('correction', YELLOW)}  user says: {letter.upper()}")
@@ -714,6 +846,34 @@ def _make_session(
                 # the data format is identical in both cases.
                 full_row = np.concatenate([row, imu_state[0]])
                 sync_buf.append(full_row)
+
+                # Teach Echo: fixed-length timed recording
+                if teach_collecting[0]:
+                    teach_buf.append(full_row)
+                    # Stream raw EMG for the live visualiser
+                    if ws_port and len(teach_buf) % 4 == 0:
+                        emg_vals = [int(v) for v in row[:8]]
+                        asyncio.create_task(_ws_broadcast({
+                            "type": "teach_emg",
+                            "emg": emg_vals,
+                        }))
+                    if len(teach_buf) >= TEACH_SAMPLES:
+                        raw_t  = np.array(teach_buf[:TEACH_SAMPLES], dtype=np.float32)
+                        word   = teach_word_ref[0]
+                        teach_collecting[0] = False
+                        teach_word_ref[0]   = None
+                        teach_buf.clear()
+                        mode[0] = "recognition"
+                        phrase_recordings.setdefault(word, []).append(raw_t)
+                        save_phrase_recordings(phrase_recordings, user_id)
+                        count = len(phrase_recordings[word])
+                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved")
+                        if ws_port:
+                            asyncio.create_task(_ws_broadcast({
+                                "type": "teach_ack",
+                                "word": word,
+                                "count": count,
+                            }))
 
                 if collecting[0]:
                     collect_buf.append(full_row)
@@ -906,12 +1066,11 @@ def _make_session(
                   flush=True)
             if ws_port:
                 asyncio.create_task(_ws_broadcast({"type": "sentence_building", "phrases": to_translate}))
-            phrases_str = ", ".join(to_translate)
             result = await asyncio.get_running_loop().run_in_executor(
-                None, _llm_call_with_system, LLM_PHRASE_SYSTEM, phrases_str
+                None, lambda: _rule_based_translate(to_translate)
+                    or _llm_call_with_system(LLM_PHRASE_SYSTEM, ", ".join(to_translate))
+                    or " ".join(p.capitalize() for p in to_translate)
             )
-            if not result:
-                result = " ".join(p.capitalize() for p in to_translate)
             sentence[0] = result
             phrase_llm_running[0] = False
             print(f"\r  {clr('echo', BOLD + VIOLET)}  {result}          \n", flush=True)
@@ -1174,6 +1333,81 @@ async def _train_terminal(
     print(clr("  Run without --train to start recognition.\n", DIM))
 
 
+async def _train_null_terminal(
+    user_id: str,
+    device_mac: str,
+    reps: int = 30,
+) -> None:
+    """Record null/background gestures from the terminal."""
+    from myo import MyoClient
+    from myo.types import EMGData, IMUData, EMGMode, IMUMode, ClassifierMode
+
+    print(clr(f"\n  Null recording — user '{user_id}'  ({reps} reps)", BOLD))
+    print(clr("  Each rep: press Enter, then do any non-sign movement for ~2s.\n"
+              "  Vary every rep: arm resting, reaching, waving, talking gestures.\n", DIM))
+
+    imu_state = [np.zeros(9, dtype=np.float32)]
+    buf: list = []
+    collecting = [False]
+
+    class NullMyo(MyoClient):
+        async def on_emg_data(self, emg: EMGData) -> None:
+            for sample in (emg.sample1, emg.sample2):
+                row = np.array(list(sample), dtype=np.float32)
+                full_row = np.concatenate([row, imu_state[0]])
+                if collecting[0]:
+                    buf.append(full_row)
+
+        async def on_imu_data(self, imu: IMUData) -> None:
+            try:
+                o = imu.orientation
+                g = imu.gyroscope
+                a = imu.accelerometer
+                imu_state[0] = np.array([
+                    o.w, o.x, o.y,
+                    g[0], g[1], g[2],
+                    a[0], a[1], a[2],
+                ], dtype=np.float32)
+            except Exception:
+                pass
+
+        async def on_aggregated_data(self, ad) -> None: pass
+        async def on_classifier_event(self, ce) -> None: pass
+        async def on_emg_data_aggregated(self, eds) -> None: pass
+        async def on_fv_data(self, fvd) -> None: pass
+        async def on_motion_event(self, me) -> None: pass
+
+    client = await NullMyo.with_device(mac=device_mac or None)
+    await client.setup(emg_mode=EMGMode.SEND_EMG, imu_mode=IMUMode.SEND_ALL,
+                       classifier_mode=ClassifierMode.DISABLED)
+
+    recordings = load_phrase_recordings(user_id)
+    loop = asyncio.get_running_loop()
+    client_task = asyncio.create_task(client.start())
+    await asyncio.sleep(1.0)
+
+    for i in range(reps):
+        await loop.run_in_executor(None, input, f"  Rep {i+1}/{reps} — press Enter then move ")
+        buf.clear()
+        collecting[0] = True
+        for c in (3, 2, 1):
+            print(f"\r  {clr(str(c), YELLOW)}...", end="", flush=True)
+            await asyncio.sleep(0.35)
+        print(f"\r  {clr('recording...', CYAN)}           ", end="", flush=True)
+        await asyncio.sleep(2.0)
+        collecting[0] = False
+        if len(buf) >= 50:
+            raw = np.array(buf, dtype=np.float32)
+            recordings.setdefault(NULL_CLASS, []).append(raw)
+            save_phrase_recordings(recordings, user_id)
+            print(f"\r  {clr('saved', GREEN)}  null rep {len(recordings[NULL_CLASS])} ({len(buf)} samples)          ")
+        else:
+            print(f"\r  {clr('too short', YELLOW)} — skipped          ")
+
+    client_task.cancel()
+    print(clr(f"\n  Done — {len(recordings.get(NULL_CLASS, []))} total null reps saved.\n", BOLD))
+
+
 async def _train_words_terminal(
     user_id: str,
     device_mac: str,
@@ -1356,6 +1590,14 @@ async def main(args: argparse.Namespace) -> None:
         await _inspect(device_mac=args.device)
         return
 
+    if args.train_null:
+        await _train_null_terminal(
+            user_id=args.user,
+            device_mac=args.device,
+            reps=args.train_null_reps,
+        )
+        return
+
     if args.train_words:
         await _train_words_terminal(
             user_id=args.user,
@@ -1402,6 +1644,10 @@ if __name__ == "__main__":
                         help="Terminal training mode — record phrases/words (DTW)")
     parser.add_argument("--train-words-reps", type=int, default=DTW_TRAIN_REPS, dest="train_words_reps",
                         help=f"Recordings per phrase in --train-words mode (default: {DTW_TRAIN_REPS})")
+    parser.add_argument("--train-null", action="store_true", dest="train_null",
+                        help="Terminal training mode — record null/background gestures")
+    parser.add_argument("--train-null-reps", type=int, default=30, dest="train_null_reps",
+                        help="Number of null reps to record (default: 30)")
     parser.add_argument("--no-llm",     action="store_true", help="Skip LLM sentence reconstruction")
     parser.add_argument("--ws-port",  type=int, default=8765, dest="ws_port",
                         help="WebSocket server port (default: 8765)")

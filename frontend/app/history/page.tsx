@@ -2,13 +2,13 @@
 import { useState, useEffect } from "react";
 import { Search, Hand, MessageSquare, ChevronRight, Star } from "lucide-react";
 
-const BG = "#F0EFF8";
-const CARD = "#FFFFFF";
+const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
+const CARD = "rgba(255,255,255,0.82)";
 const PURPLE = "#7C6FE0";
 const TEXT = "#1C1C1E";
 const TEXT2 = "#6C6C70";
 const TEXT3 = "#8E8E93";
-const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+const SHADOW = "0 2px 12px rgba(80,0,150,0.1)";
 
 type FilterTab = "all" | "favorites" | "translations" | "chats";
 
@@ -79,12 +79,12 @@ export default function HistoryPage() {
   ];
 
   return (
-    <main className="min-h-screen pb-24 px-4" style={{ backgroundColor: BG }}>
+    <main className="min-h-screen pb-24 px-4" style={{ background: BG }}>
       <div className="max-w-sm mx-auto pt-12">
         {/* Header */}
         <div className="mb-5">
-          <h1 className="text-2xl font-bold" style={{ color: TEXT }}>History</h1>
-          <p className="text-sm mt-1" style={{ color: TEXT2 }}>Your past translations and conversations</p>
+          <h1 className="text-2xl font-bold" style={{ color: "#fff" }}>History</h1>
+          <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.8)" }}>Your past translations and conversations</p>
         </div>
 
         {/* Search */}
@@ -112,8 +112,8 @@ export default function HistoryPage() {
               className="flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium cursor-pointer"
               style={
                 filter === key
-                  ? { backgroundColor: PURPLE, color: "#fff" }
-                  : { backgroundColor: CARD, color: TEXT3, border: "1px solid rgba(0,0,0,0.08)" }
+                  ? { backgroundColor: "rgba(255,255,255,0.9)", color: PURPLE }
+                  : { backgroundColor: "rgba(255,255,255,0.2)", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.3)" }
               }
             >
               {label}

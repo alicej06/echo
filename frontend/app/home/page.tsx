@@ -1,16 +1,16 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Watch, Hand, MessageSquare, ChevronRight, Clock, Lightbulb } from "lucide-react";
+import { Watch, Hand, MessageSquare, ChevronRight, Clock, Lightbulb, Sparkles } from "lucide-react";
 
-const BG = "#F0EFF8";
-const CARD = "#FFFFFF";
+const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
+const CARD = "rgba(255,255,255,0.82)";
 const PURPLE = "#7C6FE0";
 const PURPLE_LIGHT = "rgba(124,111,224,0.12)";
 const TEXT = "#1C1C1E";
 const TEXT2 = "#6C6C70";
 const TEXT3 = "#8E8E93";
-const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+const SHADOW = "0 2px 12px rgba(80,0,150,0.1)";
 
 interface SessionRecord {
   id: string;
@@ -44,12 +44,12 @@ export default function HomePage() {
   }, []);
 
   return (
-    <main className="min-h-screen pb-24 px-4" style={{ backgroundColor: BG }}>
+    <main className="min-h-screen pb-24 px-4" style={{ background: BG }}>
       <div className="max-w-sm mx-auto pt-12">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-3xl font-bold" style={{ color: TEXT }}>echo</h1>
-          <p className="text-sm mt-1" style={{ color: TEXT2 }}>Welcome back! Ready to communicate?</p>
+          <h1 className="text-3xl font-bold" style={{ color: "#fff" }}>echo</h1>
+          <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.8)" }}>Welcome back! Ready to communicate?</p>
         </div>
 
         {/* Device card */}
@@ -75,8 +75,32 @@ export default function HomePage() {
           </div>
         </div>
 
+        {/* Teach Echo — hero CTA */}
+        <Link
+          href="/teach"
+          className="rounded-2xl p-5 flex items-center gap-4 mb-6"
+          style={{
+            background: `linear-gradient(135deg, ${PURPLE} 0%, #9b8cf2 100%)`,
+            textDecoration: "none",
+            boxShadow: "0 4px 14px rgba(124,111,224,0.35)",
+            border: "1.5px solid rgba(255,255,255,0.45)",
+          }}
+        >
+          <div className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
+               style={{ backgroundColor: "rgba(255,255,255,0.2)" }}>
+            <Sparkles size={22} color="#fff" />
+          </div>
+          <div className="flex-1">
+            <p className="text-base font-bold text-white">Teach Echo a new gesture</p>
+            <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.75)" }}>
+              Record any word or phrase in 60 seconds
+            </p>
+          </div>
+          <ChevronRight size={18} color="rgba(255,255,255,0.7)" />
+        </Link>
+
         {/* Quick Actions */}
-        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: TEXT3 }}>
+        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: "rgba(255,255,255,0.65)" }}>
           Quick Actions
         </p>
         <div className="flex flex-col gap-3 mb-6">
@@ -113,8 +137,8 @@ export default function HomePage() {
 
         {/* Recent */}
         <div className="flex items-center justify-between mb-3">
-          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: TEXT3 }}>Recent</p>
-          <Link href="/history" className="flex items-center gap-1 text-xs" style={{ color: PURPLE, textDecoration: "none" }}>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.65)" }}>Recent</p>
+          <Link href="/history" className="flex items-center gap-1 text-xs" style={{ color: "rgba(255,255,255,0.8)", textDecoration: "none" }}>
             View All <Clock size={12} />
           </Link>
         </div>
@@ -139,7 +163,7 @@ export default function HomePage() {
         </div>
 
         {/* Pro Tip */}
-        <div className="rounded-2xl p-4 flex gap-3" style={{ backgroundColor: PURPLE_LIGHT }}>
+        <div className="rounded-2xl p-4 flex gap-3" style={{ backgroundColor: CARD, border: "1px solid rgba(255,255,255,0.4)" }}>
           <Lightbulb size={20} style={{ color: "#F59E0B", flexShrink: 0 }} />
           <div>
             <p className="text-sm font-semibold mb-1" style={{ color: TEXT }}>Pro Tip</p>

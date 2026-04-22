@@ -5,8 +5,8 @@ import { useMyoWs } from "@/hooks/use-myo-ws";
 import { useDeepgram } from "@/hooks/use-deepgram";
 import { useElevenLabs } from "@/hooks/use-elevenlabs";
 
-const BG = "#F0EFF8";
-const CARD = "#FFFFFF";
+const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
+const CARD = "rgba(255,255,255,0.82)";
 const PURPLE = "#7C6FE0";
 const PURPLE_LIGHT = "rgba(124,111,224,0.12)";
 const PURPLE_MED = "rgba(124,111,224,0.20)";
@@ -14,7 +14,7 @@ const TEXT = "#1C1C1E";
 const TEXT2 = "#6C6C70";
 const TEXT3 = "#8E8E93";
 const GREEN = "#34C759";
-const SHADOW = "0 1px 4px rgba(0,0,0,0.07)";
+const SHADOW = "0 2px 12px rgba(80,0,150,0.1)";
 
 interface Message {
   id: string;
@@ -149,24 +149,24 @@ export default function ConversationPage() {
         : currentPhrase || "";
 
   return (
-    <main className="min-h-screen flex flex-col" style={{ backgroundColor: BG }}>
+    <main className="min-h-screen flex flex-col" style={{ background: BG }}>
       <div className="max-w-sm mx-auto w-full flex flex-col pt-12" style={{ minHeight: "100dvh" }}>
 
         {/* ── Header ──────────────────────────────────────────────────── */}
         <div className="px-4 mb-3">
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h1 className="text-2xl font-bold" style={{ color: TEXT }}>Conversation</h1>
-              <p className="text-sm mt-0.5" style={{ color: TEXT2 }}>ASL ↔ Voice</p>
+              <h1 className="text-2xl font-bold" style={{ color: "#fff" }}>Conversation</h1>
+              <p className="text-sm mt-0.5" style={{ color: "rgba(255,255,255,0.8)" }}>ASL ↔ Voice</p>
             </div>
             {/* ElevenLabs speaking indicator */}
             {isSpeaking && (
               <div
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
-                style={{ backgroundColor: PURPLE_MED }}
+                style={{ backgroundColor: "rgba(255,255,255,0.25)" }}
               >
-                <Volume2 size={13} style={{ color: PURPLE }} />
-                <span className="text-xs font-medium" style={{ color: PURPLE }}>Speaking</span>
+                <Volume2 size={13} style={{ color: "#fff" }} />
+                <span className="text-xs font-medium" style={{ color: "#fff" }}>Speaking</span>
               </div>
             )}
           </div>
@@ -175,17 +175,13 @@ export default function ConversationPage() {
           <div
             className="flex items-center justify-between px-3 py-2.5 rounded-2xl"
             style={{
-              background: isActive
-                ? "linear-gradient(135deg, rgba(124,111,224,0.14) 0%, rgba(124,111,224,0.07) 100%)"
-                : "rgba(0,0,0,0.04)",
-              border: isActive
-                ? "1px solid rgba(124,111,224,0.2)"
-                : "1px solid rgba(0,0,0,0.06)",
+              backgroundColor: "rgba(255,255,255,0.15)",
+              border: "1px solid rgba(255,255,255,0.25)",
             }}
           >
             <div className="flex items-center gap-2">
-              <Hand size={14} style={{ color: isActive ? PURPLE : TEXT3 }} />
-              <span className="text-xs font-medium" style={{ color: isActive ? PURPLE : TEXT3 }}>
+              <Hand size={14} style={{ color: isActive ? "#fff" : "rgba(255,255,255,0.6)" }} />
+              <span className="text-xs font-medium" style={{ color: isActive ? "#fff" : "rgba(255,255,255,0.6)" }}>
                 {isActive
                   ? isCapturing
                     ? "Reading gesture…"
@@ -207,11 +203,11 @@ export default function ConversationPage() {
             <div className="flex flex-col items-center justify-center h-full gap-3 pb-12">
               <div
                 className="w-14 h-14 rounded-2xl flex items-center justify-center mb-2"
-                style={{ backgroundColor: PURPLE_LIGHT }}
+                style={{ backgroundColor: "rgba(255,255,255,0.2)" }}
               >
-                <Hand size={28} style={{ color: PURPLE }} />
+                <Hand size={28} style={{ color: "#fff" }} />
               </div>
-              <p className="text-sm text-center max-w-xs" style={{ color: TEXT3 }}>
+              <p className="text-sm text-center max-w-xs" style={{ color: "rgba(255,255,255,0.8)" }}>
                 {isActive
                   ? "Start signing — your words will appear here.\nYour partner can reply by holding the mic button."
                   : "Connect to begin the conversation."}
@@ -265,7 +261,7 @@ export default function ConversationPage() {
                           label={isAsl ? "ASL → text" : "voice → text"}
                           isAsl={isAsl}
                         />
-                        <span className="text-xs" style={{ color: TEXT3 }}>
+                        <span className="text-xs" style={{ color: "rgba(255,255,255,0.7)" }}>
                           {msg.timestamp}
                         </span>
                       </div>
@@ -290,12 +286,10 @@ export default function ConversationPage() {
                   <div
                     className="px-4 py-3 text-sm"
                     style={{
-                      background: sentenceBuilding
-                        ? `linear-gradient(135deg, ${PURPLE_MED} 0%, rgba(124,111,224,0.08) 100%)`
-                        : "rgba(124,111,224,0.06)",
-                      color: sentenceBuilding ? PURPLE : TEXT3,
+                      backgroundColor: sentenceBuilding ? PURPLE_LIGHT : "rgba(255,255,255,0.15)",
+                      color: sentenceBuilding ? PURPLE : "rgba(255,255,255,0.85)",
                       borderRadius: "18px 18px 4px 18px",
-                      border: `1px solid ${sentenceBuilding ? "rgba(124,111,224,0.25)" : "rgba(0,0,0,0.06)"}`,
+                      border: `1px solid ${sentenceBuilding ? "rgba(124,111,224,0.25)" : "rgba(255,255,255,0.2)"}`,
                       maxWidth: "75%",
                     }}
                   >
@@ -309,7 +303,7 @@ export default function ConversationPage() {
                             style={{
                               width: 5,
                               height: 5,
-                              backgroundColor: sentenceBuilding ? PURPLE : TEXT3,
+                              backgroundColor: sentenceBuilding ? PURPLE : "rgba(255,255,255,0.7)",
                               animation: `thinking-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
                             }}
                           />
@@ -319,9 +313,9 @@ export default function ConversationPage() {
                   </div>
                   <div
                     className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
-                    style={{ backgroundColor: PURPLE_LIGHT }}
+                    style={{ backgroundColor: "rgba(255,255,255,0.2)" }}
                   >
-                    <Hand size={13} style={{ color: PURPLE }} />
+                    <Hand size={13} style={{ color: "#fff" }} />
                   </div>
                 </div>
               )}
@@ -334,18 +328,17 @@ export default function ConversationPage() {
         {/* ── Bottom controls ──────────────────────────────────────────── */}
         <div
           className="px-4 pb-24 pt-3 flex flex-col gap-2"
-          style={{ borderTop: "1px solid rgba(0,0,0,0.06)" }}
+          style={{ borderTop: "1px solid rgba(255,255,255,0.25)" }}
         >
           {/* Live preview box — Deepgram interim */}
           {isActive && (isListening || interimTranscript) && (
             <div
               className="rounded-2xl px-4 py-3 flex items-start gap-3"
               style={{
-                backgroundColor: "rgba(52,199,89,0.08)",
-                border: "1px solid rgba(52,199,89,0.2)",
+                backgroundColor: "rgba(52,199,89,0.15)",
+                border: "1px solid rgba(52,199,89,0.3)",
               }}
             >
-              {/* Pulsing green dot */}
               <div className="flex-shrink-0 mt-1">
                 <div
                   className="w-2 h-2 rounded-full"
@@ -357,7 +350,7 @@ export default function ConversationPage() {
               </div>
               <p
                 className="text-sm italic leading-relaxed flex-1"
-                style={{ color: interimTranscript ? TEXT2 : TEXT3 }}
+                style={{ color: interimTranscript ? "#fff" : "rgba(255,255,255,0.7)" }}
               >
                 {interimTranscript || "Listening…"}
               </p>
@@ -369,9 +362,9 @@ export default function ConversationPage() {
             <div
               className="rounded-2xl px-4 py-3 text-sm text-center"
               style={{
-                backgroundColor: "rgba(255,59,48,0.08)",
+                backgroundColor: "rgba(255,59,48,0.15)",
                 color: "#FF3B30",
-                border: "1px solid rgba(255,59,48,0.15)",
+                border: "1px solid rgba(255,59,48,0.3)",
               }}
             >
               Microphone access was denied. Please allow mic access in your browser settings.
