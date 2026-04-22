@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useElevenLabs } from "@/hooks/use-elevenlabs";
 
 const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
 const CARD = "rgba(255,255,255,0.82)";
@@ -38,7 +39,7 @@ const DEFAULT_PREFS: Prefs = {
 const KNOWN_PHRASES = [
   "hello", "my", "name", "echo",
   "nice to meet you", "how are you", "thank you",
-  "great", "what's your name",
+  "great", "what's your name", "alice",
 ];
 
 const VOICES = [
@@ -81,6 +82,7 @@ function SliderRow({
 
 export default function ProfilePage() {
   const router = useRouter();
+  const { speak } = useElevenLabs();
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
 
   useEffect(() => {
@@ -165,7 +167,10 @@ export default function ProfilePage() {
             {VOICES.map(({ name, desc }) => (
               <button
                 key={name}
-                onClick={() => update("selectedVoice", name)}
+                onClick={() => {
+                  update("selectedVoice", name);
+                  speak("Hi! I'm the Echo voice. Nice to meet you.");
+                }}
                 className="flex items-center justify-between p-3 rounded-xl cursor-pointer text-left"
                 style={{
                   border: prefs.selectedVoice === name
@@ -176,7 +181,7 @@ export default function ProfilePage() {
               >
                 <div>
                   <p className="text-sm font-medium" style={{ color: TEXT }}>{name}</p>
-                  <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{desc}</p>
+                  <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{desc} · tap to preview</p>
                 </div>
               </button>
             ))}

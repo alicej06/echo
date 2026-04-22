@@ -21,6 +21,7 @@ const PHRASES = [
   "thank you",
   "great",
   "what's your name",
+  "alice",
 ] as const;
 
 const REPS_NEEDED = 5;
@@ -39,6 +40,7 @@ const PHRASE_HINTS: Record<string, string> = {
   "thank you": "Flat hand from chin forward",
   great: "Thumbs up or fist push forward",
   "what's your name": "WH sign → point at person → name sign",
+  alice: "Fingerspell A-L-I-C-E",
 };
 
 function PhraseCard({

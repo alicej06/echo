@@ -9,10 +9,13 @@ const VOICE_ID =
 export interface UseElevenLabsReturn {
   speak: (text: string) => Promise<void>;
   isSpeaking: boolean;
+  muted: boolean;
+  toggleMute: () => void;
 }
 
 export function useElevenLabs(): UseElevenLabsReturn {
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [muted, setMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
 
@@ -29,9 +32,16 @@ export function useElevenLabs(): UseElevenLabsReturn {
     }
   }, []);
 
+  const toggleMute = useCallback(() => {
+    setMuted((m) => {
+      if (!m) cancelCurrent();
+      return !m;
+    });
+  }, [cancelCurrent]);
+
   const speak = useCallback(
     async (text: string) => {
-      if (!text.trim()) return;
+      if (!text.trim() || muted) return;
 
       if (!API_KEY) {
         console.warn("[useElevenLabs] NEXT_PUBLIC_ELEVENLABS_API_KEY is not set");
@@ -92,7 +102,7 @@ export function useElevenLabs(): UseElevenLabsReturn {
         setIsSpeaking(false);
       }
     },
-    [cancelCurrent]
+    [cancelCurrent, muted]
   );
 
   // Clean up on unmount
@@ -103,5 +113,5 @@ export function useElevenLabs(): UseElevenLabsReturn {
     [cancelCurrent]
   );
 
-  return { speak, isSpeaking };
+  return { speak, isSpeaking, muted, toggleMute };
 }

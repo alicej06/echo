@@ -46,6 +46,7 @@ PHRASES = [
     "thank you",
     "great",
     "what's your name",
+    "alice",
 ]
 
 # Internal label for the null/background class.
