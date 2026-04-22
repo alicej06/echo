@@ -1,7 +1,13 @@
 "use client";
-import { useState, useEffect } from "react";
-import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate, Plus, Sparkles } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { User, Watch, SlidersHorizontal, ChevronRight, Shield, HelpCircle, Info, Vibrate, Plus, Sparkles, Play, Square, Loader2, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+
+const ELEVENLABS_KEY = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
+const PREVIEW_TEXT   = "Hey! I'm your Echo voice — warm, clear, and ready to help you connect.";
+
+interface CustomVoice { name: string; voiceId: string; }
+
 
 const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
 const CARD = "rgba(255,255,255,0.82)";
@@ -83,14 +89,77 @@ function SliderRow({
 
 export default function ProfilePage() {
   const router = useRouter();
-  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  const [prefs, setPrefs]               = useState<Prefs>(DEFAULT_PREFS);
+  const [customVoices, setCustomVoices] = useState<CustomVoice[]>([]);
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const audioRef  = useRef<HTMLAudioElement | null>(null);
+  const blobRef   = useRef<string | null>(null);
 
   useEffect(() => {
     try {
       const raw = localStorage.getItem("maia_prefs");
       if (raw) setPrefs({ ...DEFAULT_PREFS, ...(JSON.parse(raw) as Partial<Prefs>) });
     } catch { /* ignore */ }
+    try {
+      const cv = localStorage.getItem("maia_custom_voices");
+      if (cv) setCustomVoices(JSON.parse(cv) as CustomVoice[]);
+    } catch { /* ignore */ }
   }, []);
+
+  // Stop any playing preview on unmount
+  useEffect(() => () => {
+    audioRef.current?.pause();
+    if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+  }, []);
+
+  const previewVoice = useCallback(async (voiceId: string) => {
+    // If same voice is playing, stop it
+    if (previewingId === voiceId) {
+      audioRef.current?.pause();
+      if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null; }
+      setPreviewingId(null);
+      return;
+    }
+    // Stop any current preview
+    audioRef.current?.pause();
+    if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null; }
+
+    if (!ELEVENLABS_KEY) return;
+    setPreviewingId(voiceId);
+    try {
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: "POST",
+        headers: { "xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: PREVIEW_TEXT,
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      });
+      if (!res.ok) { setPreviewingId(null); return; }
+      const blob = new Blob([await res.arrayBuffer()], { type: "audio/mpeg" });
+      const url  = URL.createObjectURL(blob);
+      blobRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { setPreviewingId(null); URL.revokeObjectURL(url); blobRef.current = null; };
+      audio.onerror = () => setPreviewingId(null);
+      await audio.play();
+    } catch { setPreviewingId(null); }
+  }, [previewingId]);
+
+  const deleteCustomVoice = useCallback((voiceId: string) => {
+    setCustomVoices((cv) => {
+      const next = cv.filter((v) => v.voiceId !== voiceId);
+      localStorage.setItem("maia_custom_voices", JSON.stringify(next));
+      return next;
+    });
+    // If deleted voice was selected, reset to Lauren
+    if (prefs.selectedVoiceId === voiceId) {
+      update("selectedVoice", "Lauren");
+      update("selectedVoiceId", "l4Coq6695JDX9xtLqXDE");
+    }
+  }, [prefs.selectedVoiceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = <K extends keyof Prefs>(key: K, value: Prefs[K]) => {
     setPrefs((p) => {
@@ -163,32 +232,111 @@ export default function ProfilePage() {
         <SectionLabel label="Voice" />
         <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
           <p className="text-sm font-medium mb-3" style={{ color: TEXT }}>Select Voice</p>
-          <div className="flex flex-col gap-2 mb-4">
-            {VOICES.map(({ name, desc, voiceId }) => (
-              <button
-                key={name}
-                onClick={() => {
-                  update("selectedVoice", name);
-                  update("selectedVoiceId", voiceId);
-                }}
-                className="flex items-center justify-between p-3 rounded-xl cursor-pointer text-left"
-                style={{
-                  border: prefs.selectedVoice === name
-                    ? `2px solid ${PURPLE}`
-                    : "1px solid rgba(0,0,0,0.08)",
-                  backgroundColor: prefs.selectedVoice === name ? PURPLE_LIGHT : "transparent",
-                }}
-              >
-                <div>
-                  <p className="text-sm font-medium" style={{ color: TEXT }}>{name}</p>
-                  <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{desc}</p>
+
+          {/* Preset voices */}
+          <div className="flex flex-col gap-2 mb-3">
+            {VOICES.map(({ name, desc, voiceId }) => {
+              const isSelected  = prefs.selectedVoiceId === voiceId;
+              const isPreviewing = previewingId === voiceId;
+              return (
+                <div
+                  key={name}
+                  className="flex items-center gap-2 p-3 rounded-xl"
+                  style={{
+                    border: isSelected ? `2px solid ${PURPLE}` : "1px solid rgba(0,0,0,0.08)",
+                    backgroundColor: isSelected ? PURPLE_LIGHT : "transparent",
+                  }}
+                >
+                  {/* Select */}
+                  <button
+                    onClick={() => { update("selectedVoice", name); update("selectedVoiceId", voiceId); }}
+                    className="flex-1 text-left cursor-pointer"
+                  >
+                    <p className="text-sm font-medium" style={{ color: TEXT }}>{name}</p>
+                    <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>{desc}</p>
+                  </button>
+
+                  {/* Preview play/stop */}
+                  <button
+                    onClick={() => previewVoice(voiceId)}
+                    className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer"
+                    style={{ backgroundColor: isPreviewing ? PURPLE : "rgba(0,0,0,0.06)" }}
+                    title={isPreviewing ? "Stop preview" : "Preview voice"}
+                  >
+                    {isPreviewing
+                      ? <Square size={12} fill="#fff" style={{ color: "#fff" }} />
+                      : previewingId === voiceId
+                        ? <Loader2 size={13} style={{ color: PURPLE, animation: "spin 1s linear infinite" }} />
+                        : <Play size={13} fill={isSelected ? PURPLE : TEXT3} style={{ color: isSelected ? PURPLE : TEXT3 }} />
+                    }
+                  </button>
+
+                  {/* Selected dot */}
+                  {isSelected && <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: PURPLE }} />}
                 </div>
-                {prefs.selectedVoice === name && (
-                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: PURPLE }} />
-                )}
-              </button>
-            ))}
+              );
+            })}
           </div>
+
+          {/* Custom / cloned voices */}
+          {customVoices.length > 0 && (
+            <>
+              <p className="text-xs font-semibold uppercase tracking-wider mb-2 mt-4" style={{ color: TEXT3 }}>
+                Your Voices
+              </p>
+              <div className="flex flex-col gap-2 mb-3">
+                {customVoices.map(({ name, voiceId }) => {
+                  const isSelected   = prefs.selectedVoiceId === voiceId;
+                  const isPreviewing = previewingId === voiceId;
+                  return (
+                    <div
+                      key={voiceId}
+                      className="flex items-center gap-2 p-3 rounded-xl"
+                      style={{
+                        border: isSelected ? `2px solid ${PURPLE}` : "1px solid rgba(0,0,0,0.08)",
+                        backgroundColor: isSelected ? PURPLE_LIGHT : "transparent",
+                      }}
+                    >
+                      {/* Select */}
+                      <button
+                        onClick={() => { update("selectedVoice", name); update("selectedVoiceId", voiceId); }}
+                        className="flex-1 text-left cursor-pointer"
+                      >
+                        <p className="text-sm font-medium" style={{ color: TEXT }}>{name}</p>
+                        <p className="text-xs mt-0.5" style={{ color: TEXT3 }}>Custom voice</p>
+                      </button>
+
+                      {/* Preview */}
+                      <button
+                        onClick={() => previewVoice(voiceId)}
+                        className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer"
+                        style={{ backgroundColor: isPreviewing ? PURPLE : "rgba(0,0,0,0.06)" }}
+                        title={isPreviewing ? "Stop preview" : "Preview voice"}
+                      >
+                        {isPreviewing
+                          ? <Square size={12} fill="#fff" style={{ color: "#fff" }} />
+                          : <Play size={13} fill={isSelected ? PURPLE : TEXT3} style={{ color: isSelected ? PURPLE : TEXT3 }} />
+                        }
+                      </button>
+
+                      {/* Delete */}
+                      <button
+                        onClick={() => deleteCustomVoice(voiceId)}
+                        className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer"
+                        style={{ backgroundColor: "rgba(255,59,48,0.08)" }}
+                        title="Remove from library"
+                      >
+                        <Trash2 size={13} style={{ color: "#FF3B30" }} />
+                      </button>
+
+                      {isSelected && <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: PURPLE }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
 
           {/* Personalize voice entry point */}
           <button
