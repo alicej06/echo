@@ -26,11 +26,21 @@ type Stage = "idle" | "recording" | "recorded" | "loading" | "preview" | "saved"
 
 function saveVoiceToProfile(voiceId: string, voiceName: string) {
   try {
-    const raw  = localStorage.getItem("maia_prefs");
+    // 1. Set as active voice in prefs
+    const raw   = localStorage.getItem("maia_prefs");
     const prefs = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     prefs.selectedVoiceId = voiceId;
     prefs.selectedVoice   = voiceName;
     localStorage.setItem("maia_prefs", JSON.stringify(prefs));
+
+    // 2. Append to persistent custom voice library (deduplicated by voiceId)
+    const libRaw  = localStorage.getItem("maia_custom_voices");
+    const library = libRaw ? (JSON.parse(libRaw) as { name: string; voiceId: string }[]) : [];
+    if (!library.some((v) => v.voiceId === voiceId)) {
+      library.push({ name: voiceName, voiceId });
+      localStorage.setItem("maia_custom_voices", JSON.stringify(library));
+    }
+
     console.log(`[voice-settings] saved voice → ${voiceName} (${voiceId})`);
   } catch { /* ignore */ }
 }
