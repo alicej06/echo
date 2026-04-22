@@ -865,8 +865,11 @@ def _make_session(
                         teach_buf.clear()
                         mode[0] = "recognition"
                         phrase_recordings.setdefault(word, []).append(raw_t)
-                        save_phrase_recordings(phrase_recordings, user_id)
                         count = len(phrase_recordings[word])
+                        _snap = {k: list(v) for k, v in phrase_recordings.items()}
+                        asyncio.get_running_loop().run_in_executor(
+                            None, save_phrase_recordings, _snap, user_id
+                        )
                         print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved")
                         if ws_port:
                             asyncio.create_task(_ws_broadcast({

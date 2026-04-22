@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Mic, Square, Play, Hand, Volume2 } from "lucide-react";
+import { Mic, Square, Play, Hand, Volume2, VolumeX } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 import { useDeepgram } from "@/hooks/use-deepgram";
 import { useElevenLabs } from "@/hooks/use-elevenlabs";
@@ -91,9 +91,10 @@ export default function ConversationPage() {
     stopListening,
   } = useDeepgram();
 
-  const { speak, isSpeaking } = useElevenLabs();
+  const { speak, isSpeaking, muted, toggleMute } = useElevenLabs();
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [micMuted, setMicMuted] = useState(false);
   const prevSentenceRef = useRef("");
   const prevFinalRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -102,6 +103,16 @@ export default function ConversationPage() {
   const isCapturing = gestureState === "capturing";
   const isThinking = gestureState === "thinking" || sentenceBuilding;
   const showSigningIndicator = isActive && (isCapturing || isThinking || !!currentPhrase);
+
+  // Auto-start mic when conversation connects; stop when it ends
+  useEffect(() => {
+    if (isActive && !micMuted) {
+      startListening();
+    } else {
+      stopListening();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   // Commit ASL sentence → chat bubble + speak aloud via ElevenLabs
   useEffect(() => {
@@ -129,14 +140,15 @@ export default function ConversationPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, interimTranscript, showSigningIndicator]);
 
-  const handleMicDown = useCallback(() => {
-    if (isListening) return;
-    startListening();
-  }, [isListening, startListening]);
-
-  const handleMicUp = useCallback(() => {
-    stopListening();
-  }, [stopListening]);
+  const toggleMic = useCallback(() => {
+    if (micMuted) {
+      setMicMuted(false);
+      startListening();
+    } else {
+      setMicMuted(true);
+      stopListening();
+    }
+  }, [micMuted, startListening, stopListening]);
 
   const pendingLabel = sentenceBuilding
     ? sentencePhrases.length > 0
@@ -159,16 +171,26 @@ export default function ConversationPage() {
               <h1 className="text-2xl font-bold" style={{ color: "#fff" }}>Conversation</h1>
               <p className="text-sm mt-0.5" style={{ color: "rgba(255,255,255,0.8)" }}>ASL ↔ Voice</p>
             </div>
-            {/* ElevenLabs speaking indicator */}
-            {isSpeaking && (
-              <div
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full"
-                style={{ backgroundColor: "rgba(255,255,255,0.25)" }}
-              >
-                <Volume2 size={13} style={{ color: "#fff" }} />
-                <span className="text-xs font-medium" style={{ color: "#fff" }}>Speaking</span>
-              </div>
-            )}
+            {/* Mute toggle + speaking indicator */}
+            <button
+              onClick={toggleMute}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full cursor-pointer"
+              style={{
+                backgroundColor: muted
+                  ? "rgba(255,59,48,0.25)"
+                  : isSpeaking
+                    ? "rgba(255,255,255,0.35)"
+                    : "rgba(255,255,255,0.2)",
+                border: muted ? "1px solid rgba(255,59,48,0.4)" : "1px solid rgba(255,255,255,0.25)",
+              }}
+            >
+              {muted
+                ? <VolumeX size={13} style={{ color: "#fff" }} />
+                : <Volume2 size={13} style={{ color: "#fff" }} />}
+              <span className="text-xs font-medium" style={{ color: "#fff" }}>
+                {muted ? "Muted" : isSpeaking ? "Speaking" : "Sound on"}
+              </span>
+            </button>
           </div>
 
           {/* Myo status bar */}
@@ -371,37 +393,30 @@ export default function ConversationPage() {
             </div>
           )}
 
-          {/* Hold-to-speak mic button */}
+          {/* Mic mute toggle */}
           {isActive && micPermission !== "denied" && (
             <button
-              onPointerDown={handleMicDown}
-              onPointerUp={handleMicUp}
-              onPointerLeave={handleMicUp}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold select-none cursor-pointer"
+              onClick={toggleMic}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold cursor-pointer"
               style={{
-                background: isListening
-                  ? `linear-gradient(135deg, ${GREEN} 0%, #28A745 100%)`
-                  : CARD,
-                color: isListening ? "#fff" : TEXT2,
-                boxShadow: isListening
-                  ? "0 4px 14px rgba(52,199,89,0.35)"
-                  : SHADOW,
+                background: micMuted
+                  ? "rgba(255,59,48,0.10)"
+                  : isListening
+                    ? `linear-gradient(135deg, ${GREEN} 0%, #28A745 100%)`
+                    : CARD,
+                color: micMuted ? "#FF3B30" : isListening ? "#fff" : TEXT2,
+                boxShadow: isListening && !micMuted ? "0 4px 14px rgba(52,199,89,0.35)" : SHADOW,
                 fontSize: 15,
-                border: isListening ? "none" : "1px solid rgba(0,0,0,0.06)",
+                border: micMuted
+                  ? "1px solid rgba(255,59,48,0.2)"
+                  : isListening
+                    ? "none"
+                    : "1px solid rgba(0,0,0,0.06)",
                 transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
               }}
             >
-              {isListening ? (
-                <>
-                  <Volume2 size={18} />
-                  Listening…
-                </>
-              ) : (
-                <>
-                  <Mic size={18} />
-                  Hold to Speak
-                </>
-              )}
+              <Mic size={18} />
+              {micMuted ? "Mic off — tap to unmute" : isListening ? "Listening…" : "Mic on"}
             </button>
           )}
 

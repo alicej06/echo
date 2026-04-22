@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Watch, Volume2, Check, Loader2, Mic } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
+import { useElevenLabs } from "@/hooks/use-elevenlabs";
 
 const PURPLE = "#7C6FE0";
 const GREEN  = "#34C759";
@@ -28,6 +29,7 @@ const STEPS: OnboardStep[] = ["wristband", "calibration", "voice", "done"];
 export default function OnboardingPage() {
   const router = useRouter();
   const myo    = useMyoWs();
+  const { speak } = useElevenLabs();
 
   const [stepIdx,        setStepIdx]        = useState(0);
   const [selectedVoice,  setSelectedVoice]  = useState("Samantha");
@@ -170,12 +172,12 @@ export default function OnboardingPage() {
             onRecord={handleRecord}
           />
         )}
-        {STEPS[stepIdx] === "voice" && <VoiceStep selected={selectedVoice} onSelect={setSelectedVoice} />}
+        {STEPS[stepIdx] === "voice" && <VoiceStep selected={selectedVoice} onSelect={setSelectedVoice} speak={speak} />}
         {STEPS[stepIdx] === "done"  && <DoneStep />}
       </div>
 
       {/* CTA */}
-      <div className="w-full max-w-sm">
+      <div className="w-full max-w-sm" style={{ paddingBottom: "2rem" }}>
         <button
           onClick={onContinue}
           disabled={!canProceed}
@@ -441,7 +443,7 @@ function CalibrationStep({
 
 // ── Step 3: Voice ─────────────────────────────────────────────────────────
 
-function VoiceStep({ selected, onSelect }: { selected: string; onSelect: (v: string) => void }) {
+function VoiceStep({ selected, onSelect, speak }: { selected: string; onSelect: (v: string) => void; speak: (t: string) => Promise<void> }) {
   return (
     <>
       <div
@@ -464,13 +466,7 @@ function VoiceStep({ selected, onSelect }: { selected: string; onSelect: (v: str
             key={name}
             onClick={() => {
               onSelect(name);
-              if (typeof window !== "undefined") {
-                const u = new SpeechSynthesisUtterance(`Hi, I'm ${name}.`);
-                const voices = window.speechSynthesis.getVoices();
-                const match = voices.find((v) => v.name.includes(name));
-                if (match) u.voice = match;
-                window.speechSynthesis.speak(u);
-              }
+              speak(`Hi! I'm the Echo voice. Nice to meet you.`);
             }}
             style={{
               padding: "12px 16px",

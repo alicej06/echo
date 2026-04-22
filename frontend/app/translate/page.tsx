@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Play, Square, RotateCcw, Trash2 } from "lucide-react";
+import { Play, Square, RotateCcw, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
+import { useElevenLabs } from "@/hooks/use-elevenlabs";
 
 const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
 const CARD = "rgba(255,255,255,0.82)";
@@ -37,8 +38,10 @@ export default function TranslatePage() {
     clearStream,
   } = useMyoWs();
 
+  const { speak, muted, toggleMute } = useElevenLabs();
   const [phraseKey, setPhraseKey] = useState(0);
   const prevPhraseRef = useRef("");
+  const prevSentenceRef = useRef("");
   const sessionStartRef = useRef<number>(Date.now());
 
   const isActive = status === "connected" || status === "demo";
@@ -64,26 +67,24 @@ export default function TranslatePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
-  // Animate + TTS on new phrase
+  // Animate on new phrase
   useEffect(() => {
     if (!currentPhrase || currentPhrase === prevPhraseRef.current) return;
     setPhraseKey((k) => k + 1);
     prevPhraseRef.current = currentPhrase;
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(currentPhrase);
-      utt.rate = 0.95;
-      window.speechSynthesis.speak(utt);
-    }
   }, [currentPhrase]);
 
+  // Speak completed sentence via ElevenLabs
+  useEffect(() => {
+    if (!sentence || sentence === prevSentenceRef.current) return;
+    prevSentenceRef.current = sentence;
+    speak(sentence);
+  }, [sentence, speak]);
+
   const handleReplay = useCallback(() => {
-    if (!currentPhrase) return;
-    window.speechSynthesis?.cancel();
-    const utt = new SpeechSynthesisUtterance(currentPhrase);
-    utt.rate = 0.95;
-    window.speechSynthesis?.speak(utt);
-  }, [currentPhrase]);
+    if (!sentence) return;
+    speak(sentence);
+  }, [sentence, speak]);
 
   const statusDotColor =
     status === "connected" ? GREEN :
@@ -397,6 +398,19 @@ export default function TranslatePage() {
           >
             <RotateCcw size={15} />
             Replay
+          </button>
+          <button
+            onClick={toggleMute}
+            className="flex items-center justify-center gap-2 rounded-2xl py-3 px-4 font-medium cursor-pointer"
+            style={{
+              backgroundColor: muted ? "rgba(255,59,48,0.12)" : CARD,
+              boxShadow: SHADOW,
+              color: muted ? "#FF3B30" : TEXT2,
+              border: muted ? "1px solid rgba(255,59,48,0.25)" : "1px solid rgba(0,0,0,0.06)",
+              fontSize: 14,
+            }}
+          >
+            {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
           </button>
           <button
             onClick={clearStream}
