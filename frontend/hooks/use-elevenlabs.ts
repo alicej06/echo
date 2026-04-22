@@ -8,13 +8,25 @@ const API_KEY = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
 const FALLBACK_VOICE_ID =
   process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID ?? "l4Coq6695JDX9xtLqXDE"; // Lauren
 
-function getVoiceId(): string {
-  if (typeof window === "undefined") return FALLBACK_VOICE_ID;
+interface AudioPrefs {
+  voiceId: string;
+  speed: number;   // 0.6 – 1.5 (maps from the 60–150 slider)
+  volume: number;  // 0 – 1   (maps from the 0–100 slider)
+}
+
+function getAudioPrefs(): AudioPrefs {
+  if (typeof window === "undefined") {
+    return { voiceId: FALLBACK_VOICE_ID, speed: 1.0, volume: 1.0 };
+  }
   try {
     const prefs = JSON.parse(localStorage.getItem("maia_prefs") ?? "{}") as Record<string, unknown>;
-    return (prefs.selectedVoiceId as string) ?? FALLBACK_VOICE_ID;
+    return {
+      voiceId: (prefs.selectedVoiceId as string) ?? FALLBACK_VOICE_ID,
+      speed:   typeof prefs.voiceRate === "number" ? prefs.voiceRate : 1.0,
+      volume:  typeof prefs.volume    === "number" ? prefs.volume / 100 : 1.0,
+    };
   } catch {
-    return FALLBACK_VOICE_ID;
+    return { voiceId: FALLBACK_VOICE_ID, speed: 1.0, volume: 1.0 };
   }
 }
 
@@ -55,8 +67,11 @@ export function useElevenLabs(): UseElevenLabsReturn {
       try {
         setIsSpeaking(true);
 
+        // Read prefs fresh on every speak() call so slider changes take effect immediately
+        const { voiceId, speed, volume } = getAudioPrefs();
+
         const res = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${getVoiceId()}`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
           {
             method: "POST",
             headers: {
@@ -69,6 +84,7 @@ export function useElevenLabs(): UseElevenLabsReturn {
               voice_settings: {
                 stability: 0.5,
                 similarity_boost: 0.75,
+                speed,          // passed to ElevenLabs (0.7–1.2 range)
               },
             }),
           }
@@ -85,7 +101,9 @@ export function useElevenLabs(): UseElevenLabsReturn {
         blobUrlRef.current = url;
 
         const audio = new Audio(url);
-        audioRef.current = audio;
+        audio.volume       = volume;        // 0–1 applied to the audio element
+        audio.playbackRate = speed;         // also applied locally for instant feel
+        audioRef.current   = audio;
 
         audio.onended = () => {
           setIsSpeaking(false);
