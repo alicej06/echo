@@ -1,16 +1,19 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Watch, Volume2, Check, Loader2, Mic } from "lucide-react";
+import { Watch, Volume2, Check, Loader2, Mic, Play, Square } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 
 const PURPLE = "#7C6FE0";
 const GREEN  = "#34C759";
 
+const ELEVENLABS_KEY  = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
+const PREVIEW_TEXT    = "Hey! I'm your Echo voice. I'll speak your signs out loud so you can connect with anyone.";
+
 const VOICES = [
-  { name: "Samantha", desc: "Natural, friendly" },
-  { name: "Karen",    desc: "Clear, professional" },
-  { name: "Alex",     desc: "Calm, neutral" },
+  { name: "Lauren",   desc: "Warm, conversational", voiceId: "l4Coq6695JDX9xtLqXDE" },
+  { name: "Hale",     desc: "Clear, expressive",    voiceId: "wWWn96OtTHu1sn8SRGEr" },
+  { name: "Posh Josh", desc: "Confident, polished", voiceId: "NXaTw4ifg0LAguvKuIwZ" },
 ];
 
 const CAL_GESTURES = [
@@ -30,7 +33,8 @@ export default function OnboardingPage() {
   const myo    = useMyoWs();
 
   const [stepIdx,        setStepIdx]        = useState(0);
-  const [selectedVoice,  setSelectedVoice]  = useState("Samantha");
+  const [selectedVoice,  setSelectedVoice]  = useState("Lauren");
+  const [selectedVoiceId, setSelectedVoiceId] = useState("l4Coq6695JDX9xtLqXDE");
 
   // Calibration state
   const [calGestureIdx,  setCalGestureIdx]  = useState(0);  // which gesture we're on
@@ -89,7 +93,10 @@ export default function OnboardingPage() {
     try {
       const raw   = localStorage.getItem("maia_prefs");
       const prefs = raw ? JSON.parse(raw) : {};
-      localStorage.setItem("maia_prefs", JSON.stringify({ ...prefs, selectedVoice }));
+      localStorage.setItem(
+        "maia_prefs",
+        JSON.stringify({ ...prefs, selectedVoice, selectedVoiceId }),
+      );
       localStorage.setItem("echo_onboarded", "1");
     } catch { /* ignore */ }
     router.push("/home");
@@ -170,7 +177,15 @@ export default function OnboardingPage() {
             onRecord={handleRecord}
           />
         )}
-        {STEPS[stepIdx] === "voice" && <VoiceStep selected={selectedVoice} onSelect={setSelectedVoice} />}
+        {STEPS[stepIdx] === "voice" && (
+          <VoiceStep
+            selected={selectedVoiceId}
+            onSelect={(name, voiceId) => {
+              setSelectedVoice(name);
+              setSelectedVoiceId(voiceId);
+            }}
+          />
+        )}
         {STEPS[stepIdx] === "done"  && <DoneStep />}
       </div>
 
@@ -441,7 +456,59 @@ function CalibrationStep({
 
 // ── Step 3: Voice ─────────────────────────────────────────────────────────
 
-function VoiceStep({ selected, onSelect }: { selected: string; onSelect: (v: string) => void }) {
+function VoiceStep({
+  selected,
+  onSelect,
+}: {
+  selected: string;                              // voiceId of currently selected voice
+  onSelect: (name: string, voiceId: string) => void;
+}) {
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const audioRef  = useRef<HTMLAudioElement | null>(null);
+  const blobRef   = useRef<string | null>(null);
+
+  // Clean up audio on unmount
+  useEffect(() => () => {
+    audioRef.current?.pause();
+    if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+  }, []);
+
+  const previewVoice = useCallback(async (voiceId: string) => {
+    // Toggle off if already playing
+    if (previewingId === voiceId) {
+      audioRef.current?.pause();
+      if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null; }
+      setPreviewingId(null);
+      return;
+    }
+    // Stop current preview
+    audioRef.current?.pause();
+    if (blobRef.current) { URL.revokeObjectURL(blobRef.current); blobRef.current = null; }
+
+    if (!ELEVENLABS_KEY) return;
+    setPreviewingId(voiceId);
+    try {
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: "POST",
+        headers: { "xi-api-key": ELEVENLABS_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: PREVIEW_TEXT,
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      });
+      if (!res.ok) { setPreviewingId(null); return; }
+      const blob = new Blob([await res.arrayBuffer()], { type: "audio/mpeg" });
+      const url  = URL.createObjectURL(blob);
+      blobRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { setPreviewingId(null); URL.revokeObjectURL(url); blobRef.current = null; };
+      audio.onerror = () => setPreviewingId(null);
+      await audio.play();
+    } catch { setPreviewingId(null); }
+  }, [previewingId]);
+
   return (
     <>
       <div
@@ -455,48 +522,75 @@ function VoiceStep({ selected, onSelect }: { selected: string; onSelect: (v: str
           Choose your voice
         </h2>
         <p style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.55 }}>
-          Echo speaks your signs aloud. Tap to preview.
+          Echo speaks your signs aloud. Tap a voice to select, or hit ▶ to hear a preview.
         </p>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {VOICES.map(({ name, desc }) => (
-          <button
-            key={name}
-            onClick={() => {
-              onSelect(name);
-              if (typeof window !== "undefined") {
-                const u = new SpeechSynthesisUtterance(`Hi, I'm ${name}.`);
-                const voices = window.speechSynthesis.getVoices();
-                const match = voices.find((v) => v.name.includes(name));
-                if (match) u.voice = match;
-                window.speechSynthesis.speak(u);
-              }
-            }}
-            style={{
-              padding: "12px 16px",
-              borderRadius: 14,
-              border:
-                selected === name
+        {VOICES.map(({ name, desc, voiceId }) => {
+          const isSelected   = selected === voiceId;
+          const isPreviewing = previewingId === voiceId;
+          return (
+            <div
+              key={voiceId}
+              style={{
+                padding: "12px 14px",
+                borderRadius: 14,
+                border: isSelected
                   ? "2px solid rgba(255,255,255,0.9)"
                   : "1.5px solid rgba(255,255,255,0.3)",
-              background:
-                selected === name ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
-              color: "#fff",
-              textAlign: "left",
-              cursor: "pointer",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              transition: "all 0.2s",
-            }}
-          >
-            <div>
-              <p style={{ fontSize: 14, fontWeight: 600 }}>{name}</p>
-              <p style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginTop: 2 }}>{desc}</p>
+                background: isSelected ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                transition: "all 0.2s",
+              }}
+            >
+              {/* Select by tapping name/desc area */}
+              <button
+                onClick={() => onSelect(name, voiceId)}
+                style={{
+                  flex: 1,
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                <p style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>{name}</p>
+                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginTop: 2 }}>{desc}</p>
+              </button>
+
+              {/* Preview button */}
+              <button
+                onClick={() => previewVoice(voiceId)}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: "50%",
+                  border: "none",
+                  background: isPreviewing ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  transition: "background 0.2s",
+                }}
+                title={isPreviewing ? "Stop preview" : "Preview voice"}
+              >
+                {isPreviewing
+                  ? <Square size={11} fill={PURPLE} style={{ color: PURPLE }} />
+                  : <Play size={12} fill={isSelected ? PURPLE : "rgba(255,255,255,0.8)"}
+                      style={{ color: isSelected ? PURPLE : "rgba(255,255,255,0.8)" }} />}
+              </button>
+
+              {/* Selected checkmark */}
+              {isSelected && <Check size={16} color="rgba(255,255,255,0.9)" style={{ flexShrink: 0 }} />}
             </div>
-            {selected === name && <Check size={16} color="rgba(255,255,255,0.9)" />}
-          </button>
-        ))}
+          );
+        })}
       </div>
     </>
   );
