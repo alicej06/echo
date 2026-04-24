@@ -26,7 +26,11 @@ export default function WelcomePage() {
 
         <div className="flex flex-col gap-3 w-full">
           <Link
+<<<<<<< HEAD
             href="/onboarding"
+=======
+            href="/signup"
+>>>>>>> 74947e4 (Angela's login page done)
             className="block text-center"
             style={{
               padding: "15px",
@@ -44,15 +48,15 @@ export default function WelcomePage() {
             GET STARTED
           </Link>
           <Link
-            href="/home"
+            href="/login"
             className="block text-center"
             style={{
               padding: "15px",
               borderRadius: 100,
-              background: "rgba(255,255,255,0.12)",
+              background: "rgba(255,255,255,0.22)",
               backdropFilter: "blur(12px)",
-              border: "1px solid rgba(255,255,255,0.2)",
-              color: "rgba(255,255,255,0.65)",
+              border: "1px solid rgba(255,255,255,0.35)",
+              color: "rgba(255,255,255,0.92)",
               textDecoration: "none",
               fontSize: 12,
               fontWeight: 600,

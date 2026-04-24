@@ -1,7 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+<<<<<<< HEAD
 import { Watch, Hand, MessageSquare, ChevronRight, Clock, Lightbulb, Sparkles } from "lucide-react";
+=======
+import { useRouter } from "next/navigation";
+import { Watch, Hand, MessageSquare, ChevronRight, Clock, Lightbulb, LogOut } from "lucide-react";
+>>>>>>> 74947e4 (Angela's login page done)
 
 const BG = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
 const CARD = "rgba(255,255,255,0.82)";
@@ -31,7 +36,9 @@ function timeAgo(dateStr: string) {
 }
 
 export default function HomePage() {
+  const router = useRouter();
   const [recent, setRecent] = useState<SessionRecord[]>([]);
+  const [userEmail, setUserEmail] = useState("");
 
   useEffect(() => {
     try {
@@ -40,16 +47,52 @@ export default function HomePage() {
         const all = JSON.parse(raw) as SessionRecord[];
         setRecent([...all].reverse().slice(0, 3));
       }
+      const email = localStorage.getItem("userEmail");
+      setUserEmail(email || "");
     } catch { /* ignore */ }
   }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("userToken");
+    localStorage.removeItem("userEmail");
+    router.push("/login");
+  };
 
   return (
     <main className="min-h-screen pb-24 px-4" style={{ background: BG }}>
       <div className="max-w-sm mx-auto pt-12">
+<<<<<<< HEAD
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold" style={{ color: "#fff" }}>echo</h1>
           <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.8)" }}>Welcome back! Ready to communicate?</p>
+=======
+      {/* Header */}
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold" style={{ color: TEXT }}>echo</h1>
+            <p className="text-sm mt-1" style={{ color: TEXT2 }}>Welcome back! Ready to communicate?</p>
+          </div>
+          <button
+            onClick={handleLogout}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "rgba(124, 111, 224, 0.1)",
+              border: "1px solid rgba(124, 111, 224, 0.2)",
+              color: PURPLE,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <LogOut size={14} />
+            Logout
+          </button>
+>>>>>>> 74947e4 (Angela's login page done)
         </div>
 
         {/* Device card */}
