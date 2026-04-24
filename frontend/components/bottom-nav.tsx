@@ -17,7 +17,8 @@ const GRAY = "#8E8E93";
 
 export function BottomNav() {
   const pathname = usePathname();
-  if (pathname === "/") return null;
+  // Hide on landing, login, and signup pages
+  if (pathname === "/" || pathname === "/login" || pathname === "/signup") return null;
 
   return (
     <nav
