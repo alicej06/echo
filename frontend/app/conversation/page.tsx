@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Mic, Square, Play, Hand, Volume2, VolumeX } from "lucide-react";
+import { Mic, Square, Play, Hand, Volume2, VolumeX, Pencil, Check, X } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 import { useDeepgram } from "@/hooks/use-deepgram";
 import { useElevenLabs } from "@/hooks/use-elevenlabs";
@@ -95,6 +95,8 @@ export default function ConversationPage() {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [micMuted, setMicMuted] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText,  setEditText]  = useState("");
   const prevSentenceRef = useRef("");
   const prevFinalRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -149,6 +151,24 @@ export default function ConversationPage() {
       stopListening();
     }
   }, [micMuted, startListening, stopListening]);
+
+  const startEdit = useCallback((msg: Message) => {
+    setEditingId(msg.id);
+    setEditText(msg.text);
+  }, []);
+
+  const saveEdit = useCallback((id: string) => {
+    setMessages((m) =>
+      m.map((msg) => (msg.id === id ? { ...msg, text: editText.trim() || msg.text } : msg))
+    );
+    setEditingId(null);
+    setEditText("");
+  }, [editText]);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditText("");
+  }, []);
 
   const pendingLabel = sentenceBuilding
     ? sentencePhrases.length > 0
@@ -258,35 +278,78 @@ export default function ConversationPage() {
                       className="flex flex-col gap-1.5"
                       style={{ maxWidth: "75%", alignItems: isAsl ? "flex-end" : "flex-start" }}
                     >
-                      <div
-                        className="px-4 py-3 text-sm leading-relaxed"
-                        style={
-                          isAsl
-                            ? {
-                                background: `linear-gradient(135deg, ${PURPLE} 0%, #6A5FCC 100%)`,
-                                color: "#fff",
-                                borderRadius: "18px 18px 4px 18px",
-                                boxShadow: "0 2px 8px rgba(124,111,224,0.3)",
-                              }
-                            : {
-                                backgroundColor: CARD,
-                                color: TEXT,
-                                borderRadius: "18px 18px 18px 4px",
-                                boxShadow: SHADOW,
-                              }
-                        }
-                      >
-                        {msg.text}
-                      </div>
-                      <div className="flex items-center gap-1.5 px-1">
-                        <Badge
-                          label={isAsl ? "ASL → text" : "voice → text"}
-                          isAsl={isAsl}
-                        />
-                        <span className="text-xs" style={{ color: "rgba(255,255,255,0.7)" }}>
-                          {msg.timestamp}
-                        </span>
-                      </div>
+                      {/* Bubble — editable inline when selected */}
+                      {editingId === msg.id ? (
+                        <div className="flex flex-col gap-1.5 w-full">
+                          <textarea
+                            autoFocus
+                            rows={2}
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveEdit(msg.id); }
+                              if (e.key === "Escape") cancelEdit();
+                            }}
+                            className="w-full rounded-2xl px-4 py-3 text-sm leading-relaxed outline-none resize-none"
+                            style={{
+                              backgroundColor: CARD,
+                              color: TEXT,
+                              border: `2px solid ${PURPLE}`,
+                              boxShadow: SHADOW,
+                            }}
+                          />
+                          <div className={`flex gap-1.5 ${isAsl ? "justify-end" : "justify-start"}`}>
+                            <button onClick={() => saveEdit(msg.id)}
+                              className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold cursor-pointer"
+                              style={{ backgroundColor: GREEN, color: "#fff" }}>
+                              <Check size={11} /> Save
+                            </button>
+                            <button onClick={cancelEdit}
+                              className="flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold cursor-pointer"
+                              style={{ backgroundColor: "rgba(255,255,255,0.25)", color: "#fff" }}>
+                              <X size={11} /> Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className="px-4 py-3 text-sm leading-relaxed"
+                          style={
+                            isAsl
+                              ? {
+                                  background: `linear-gradient(135deg, ${PURPLE} 0%, #6A5FCC 100%)`,
+                                  color: "#fff",
+                                  borderRadius: "18px 18px 4px 18px",
+                                  boxShadow: "0 2px 8px rgba(124,111,224,0.3)",
+                                }
+                              : {
+                                  backgroundColor: CARD,
+                                  color: TEXT,
+                                  borderRadius: "18px 18px 18px 4px",
+                                  boxShadow: SHADOW,
+                                }
+                          }
+                        >
+                          {msg.text}
+                        </div>
+                      )}
+
+                      {/* Badge row + edit button */}
+                      {editingId !== msg.id && (
+                        <div className="flex items-center gap-1.5 px-1">
+                          <Badge label={isAsl ? "ASL → text" : "voice → text"} isAsl={isAsl} />
+                          <span className="text-xs" style={{ color: "rgba(255,255,255,0.7)" }}>
+                            {msg.timestamp}
+                          </span>
+                          <button
+                            onClick={() => startEdit(msg)}
+                            className="flex items-center gap-0.5 cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+                            title="Edit"
+                          >
+                            <Pencil size={11} style={{ color: "#fff" }} />
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* ASL user avatar */}

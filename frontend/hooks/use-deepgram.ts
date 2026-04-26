@@ -54,10 +54,13 @@ export function useDeepgram(): UseDeepgramReturn {
     }
 
     const params = new URLSearchParams({
-      model: "nova-2",
-      interim_results: "true",
-      punctuate: "true",
-      endpointing: "400",
+      model:             "nova-2",
+      interim_results:   "true",
+      punctuate:         "true",
+      smart_format:      "true",   // improves readability: numbers, dates, etc.
+      utterance_end_ms:  "1000",   // wait 1s of silence before marking utterance final
+      endpointing:       "400",    // ms of silence before Deepgram sends speech_final
+      diarize:           "false",  // single speaker only
     });
 
     // Deepgram browser auth: pass token as a subprotocol header
@@ -82,18 +85,35 @@ export function useDeepgram(): UseDeepgramReturn {
       setIsListening(true);
     };
 
+    // Buffer interim text so UtteranceEnd can flush it if needed
+    let interimBuffer = "";
+
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data as string);
+
+        // UtteranceEnd fires when utterance_end_ms of silence detected —
+        // flush whatever is in the interim buffer as a final commit
+        if (data.type === "UtteranceEnd") {
+          if (interimBuffer.trim()) {
+            setInterimTranscript("");
+            setFinalTranscript(interimBuffer.trim());
+            interimBuffer = "";
+          }
+          return;
+        }
+
         if (data.type !== "Results") return;
         const transcript: string = data.channel?.alternatives?.[0]?.transcript ?? "";
 
         if (data.speech_final && data.is_final) {
-          // End of utterance — commit as a final result
+          // Natural end of utterance — commit
+          interimBuffer = "";
           setInterimTranscript("");
           if (transcript.trim()) setFinalTranscript(transcript.trim());
         } else {
-          // Still speaking — show as live preview
+          // Still speaking — update live preview and buffer
+          interimBuffer = transcript;
           setInterimTranscript(transcript);
         }
       } catch {
