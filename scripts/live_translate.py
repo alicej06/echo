@@ -379,6 +379,11 @@ def _rule_based_translate(phrases: list[str]) -> str | None:
     if "my" in seq and "name" in seq and "echo" in seq:
         greeting = "Hello! " if "hello" in seq else ""
         return f"{greeting}My name is Echo."
+    
+    # "my name alice" / "my name is alice"
+    if "my" in seq and "name" in seq and "alice" in seq:
+        greeting = "Hello! " if "hello" in seq else ""
+        return f"{greeting}My name is Alice."
 
     # greeting + complete phrase combos
     parts = []
@@ -700,6 +705,7 @@ def _make_session(
             save_dtw_model(model, user_id)
             save_phrase_recordings(merged, user_id)
             phrase_recordings.clear()
+            phrase_recordings.update(merged)
             mode[0] = "recognition"
             cv_acc = model.get("cv_acc")
             acc_str = f"  CV acc: {cv_acc:.1%}" if cv_acc is not None else ""
@@ -739,39 +745,52 @@ def _make_session(
             if not word:
                 await _ws_broadcast({"type": "error", "message": "No word specified"})
                 return
-            # Disk is already up to date (each rep merges before saving).
-            # Using disk as the single source of truth avoids double-counting
-            # in-memory recs that were already flushed to disk.
-            disk_recs = load_phrase_recordings(user_id)
-            merged: dict[str, list] = dict(disk_recs)
-            print(f"  {clr('teach', VIOLET)}  training with {sum(len(v) for v in merged.values())} "
-                  f"total reps across {len(merged)} gesture(s)")
-            if len(merged.get(word, [])) < MIN_REPS:
+            word_reps = phrase_recordings.get(word, [])
+            if len(word_reps) < MIN_REPS:
                 await _ws_broadcast({
                     "type": "error",
-                    "message": f"Need {MIN_REPS} reps of '{word}' — have {len(merged.get(word, []))}",
+                    "message": f"Need {MIN_REPS} reps of '{word}' — have {len(word_reps)}",
                 })
                 return
-            trainable = {
-                p: v for p, v in merged.items()
-                if len(v) >= (NULL_MIN_REPS if p == NULL_CLASS else MIN_REPS)
-            }
-            if len(trainable) < 2:
-                await _ws_broadcast({
-                    "type": "error",
-                    "message": "Need at least 2 gesture types trained before adding a new one",
-                })
-                return
-            print(f"\n  {clr('teach', VIOLET)}  training model with new gesture '{word}'...")
-            model = await asyncio.get_running_loop().run_in_executor(_dtw_executor, train_dtw, trainable)
-            dtw_model[0] = model
-            save_dtw_model(model, user_id)
-            save_phrase_recordings(merged, user_id)
-            phrase_recordings.clear()
+
+            known_words = set(dtw_model[0].get("phrases", [])) if dtw_model[0] else set()
+            is_new_word = word not in known_words
+
+            # Always persist recordings
+            _snap = {k: list(v) for k, v in phrase_recordings.items()}
+            await asyncio.get_running_loop().run_in_executor(
+                None, save_phrase_recordings, _snap, user_id
+            )
+
+            if is_new_word:
+                # New word — retrain so the model learns it
+                trainable = {
+                    p: v for p, v in phrase_recordings.items()
+                    if len(v) >= (NULL_MIN_REPS if p == NULL_CLASS else MIN_REPS)
+                }
+                if len(trainable) < 2:
+                    await _ws_broadcast({
+                        "type": "error",
+                        "message": "Need at least 2 gesture types trained before adding a new one",
+                    })
+                    return
+                print(f"\n  {clr('teach', VIOLET)}  new word '{word}' — retraining model...")
+                model = await asyncio.get_running_loop().run_in_executor(
+                    _dtw_executor, train_dtw, trainable
+                )
+                dtw_model[0] = model
+                await asyncio.get_running_loop().run_in_executor(
+                    None, save_dtw_model, model, user_id
+                )
+                cv_acc = model.get("cv_acc")
+                print(f"  {clr('teach', GREEN)}  model updated — '{word}' added"
+                      + (f"  cv_acc={cv_acc:.1%}" if cv_acc else ""))
+            else:
+                # Existing word — just saved reps, no retrain needed
+                cv_acc = dtw_model[0].get("cv_acc") if dtw_model[0] else None
+                print(f"  {clr('teach', GREEN)}  '{word}' reps saved ({len(word_reps)} total)")
+
             mode[0] = "recognition"
-            cv_acc = model.get("cv_acc")
-            print(f"  {clr('teach', GREEN)}  model updated — '{word}' added"
-                  + (f"  cv_acc={cv_acc:.1%}" if cv_acc else ""))
             await _ws_broadcast({
                 "type": "teach_model_ready",
                 "word": word,
@@ -870,8 +889,8 @@ def _make_session(
                 # Teach Echo: fixed-length timed recording
                 if teach_collecting[0]:
                     teach_buf.append(full_row)
-                    # Stream raw EMG for the live visualiser
-                    if ws_port and len(teach_buf) % 4 == 0:
+                    # Stream raw EMG for the live visualiser (throttled to ~5x/sec)
+                    if ws_port and len(teach_buf) % 40 == 0:
                         emg_vals = [int(v) for v in row[:8]]
                         asyncio.create_task(_ws_broadcast({
                             "type": "teach_emg",
@@ -886,15 +905,8 @@ def _make_session(
                         mode[0] = "recognition"
                         phrase_recordings.setdefault(word, []).append(raw_t)
                         count = len(phrase_recordings[word])
-                        _disk = load_phrase_recordings(user_id)
-                        _disk[word] = phrase_recordings[word]
-                        _snap = {k: list(v) for k, v in _disk.items()}
-                        asyncio.get_running_loop().run_in_executor(
-                            None, save_phrase_recordings, _snap, user_id
-                        )
-                        total_words = len(_disk)
-                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved  "
-                              f"(library has {total_words} gesture(s) on disk)")
+                        # No disk write here — save happens in teach_train when user presses Save
+                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} (in memory)")
                         if ws_port:
                             asyncio.create_task(_ws_broadcast({
                                 "type": "teach_ack",
