@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Mic, Square, Play, Check, Loader2, Sparkles, AlertCircle } from "lucide-react";
+import { ArrowLeft, Mic, Square, Play, Pause, Check, Loader2, Sparkles, AlertCircle } from "lucide-react";
 
 const BG     = "linear-gradient(180deg, #9147C8 0%, #A066D8 30%, #C49AEE 65%, #DDD0F8 85%, #EDE8FF 100%)";
 const CARD   = "rgba(255,255,255,0.82)";
@@ -16,71 +16,143 @@ const ON_BG2 = "rgba(255,255,255,0.8)";
 const ON_BG3 = "rgba(255,255,255,0.55)";
 
 const API_KEY      = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
-const MIN_RECORD_S = 30;  // ElevenLabs minimum for cloning
-const MAX_RECORD_S = 120; // auto-stop safety net (2 minutes)
+const MIN_RECORD_S = 30;
+const MAX_RECORD_S = 120;
 
 type Tab   = "clone" | "design";
-type Stage = "idle" | "recording" | "recorded" | "loading" | "preview" | "saved" | "error";
+type Stage = "idle" | "recording" | "recorded" | "loading" | "preview" | "saved";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function saveVoiceToProfile(voiceId: string, voiceName: string) {
   try {
-    // 1. Set as active voice in prefs
     const raw   = localStorage.getItem("maia_prefs");
     const prefs = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     prefs.selectedVoiceId = voiceId;
     prefs.selectedVoice   = voiceName;
     localStorage.setItem("maia_prefs", JSON.stringify(prefs));
 
-    // 2. Append to persistent custom voice library (deduplicated by voiceId)
     const libRaw  = localStorage.getItem("maia_custom_voices");
     const library = libRaw ? (JSON.parse(libRaw) as { name: string; voiceId: string }[]) : [];
     if (!library.some((v) => v.voiceId === voiceId)) {
       library.push({ name: voiceName, voiceId });
       localStorage.setItem("maia_custom_voices", JSON.stringify(library));
     }
-
-    console.log(`[voice-settings] saved voice → ${voiceName} (${voiceId})`);
   } catch { /* ignore */ }
 }
 
 function fmt(s: number) {
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const safe = isNaN(s) || !isFinite(s) ? 0 : Math.floor(s);
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+// ── Custom audio player (replaces glitchy native <audio controls>) ─────────
+
+function AudioPlayer({ src }: { src: string }) {
+  const audioRef            = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying]   = useState(false);
+  const [current, setCurrent]   = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    const a = new Audio(src);
+    audioRef.current = a;
+    a.onloadedmetadata = () => setDuration(a.duration);
+    a.ontimeupdate     = () => setCurrent(a.currentTime);
+    a.onended          = () => { setPlaying(false); setCurrent(0); };
+    a.onerror          = () => setPlaying(false);
+    return () => { a.pause(); a.src = ""; audioRef.current = null; };
+  }, [src]);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+    } else {
+      a.play().then(() => setPlaying(true)).catch(() => {});
+    }
+  };
+
+  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = audioRef.current;
+    if (!a || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    a.currentTime = ((e.clientX - rect.left) / rect.width) * duration;
+  };
+
+  const pct = duration > 0 ? Math.min((current / duration) * 100, 100) : 0;
+
+  return (
+    <div className="flex items-center gap-3 p-3 rounded-xl"
+      style={{ backgroundColor: "rgba(0,0,0,0.06)" }}>
+      {/* Play / Pause */}
+      <button
+        onClick={toggle}
+        className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 cursor-pointer"
+        style={{ backgroundColor: PURPLE, border: "none" }}
+      >
+        {playing
+          ? <Pause size={14} fill={ON_BG} style={{ color: ON_BG }} />
+          : <Play  size={14} fill={ON_BG} style={{ color: ON_BG, marginLeft: 1 }} />}
+      </button>
+
+      {/* Track + times */}
+      <div className="flex-1 flex flex-col gap-1.5">
+        <div
+          onClick={seek}
+          className="w-full rounded-full cursor-pointer"
+          style={{ height: 4, backgroundColor: "rgba(0,0,0,0.12)", position: "relative" }}
+        >
+          <div style={{
+            position: "absolute", left: 0, top: 0, bottom: 0,
+            width: `${pct}%`,
+            backgroundColor: PURPLE,
+            borderRadius: 99,
+            transition: "width 0.1s linear",
+          }} />
+        </div>
+        <div className="flex justify-between" style={{ fontSize: 10, color: TEXT3 }}>
+          <span>{fmt(current)}</span>
+          <span>{fmt(duration)}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Clone tab ──────────────────────────────────────────────────────────────
 
 function CloneTab() {
-  const [stage,     setStage]     = useState<Stage>("idle");
-  const [elapsed,   setElapsed]   = useState(0);
-  const [audioUrl,  setAudioUrl]  = useState<string | null>(null);
-  const [voiceName, setVoiceName] = useState("");
-  const [error,     setError]     = useState("");
-  const [savedName, setSavedName] = useState("");
+  const [stage,       setStage]       = useState<Stage>("idle");
+  const [elapsed,     setElapsed]     = useState(0);
+  const [audioUrl,    setAudioUrl]    = useState<string | null>(null);
+  const [voiceName,   setVoiceName]   = useState("");
+  const [submitError, setSubmitError] = useState("");   // separate so errors don't wipe the recording
+  const [savedName,   setSavedName]   = useState("");
 
-  const recorderRef  = useRef<MediaRecorder | null>(null);
-  const streamRef    = useRef<MediaStream | null>(null);
-  const chunksRef    = useRef<Blob[]>([]);
-  const blobRef      = useRef<Blob | null>(null);
-  const timerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef   = useRef<MediaStream | null>(null);
+  const chunksRef   = useRef<Blob[]>([]);
+  const blobRef     = useRef<Blob | null>(null);
+  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopTimer = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
 
-  // Stable stop function stored in a ref so the auto-stop timer can call it
   const doStop = useCallback(() => {
     stopTimer();
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();   // triggers onstop → sets stage to "recorded"
+      recorderRef.current.stop();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const doStopRef = useRef(doStop);
   doStopRef.current = doStop;
 
   const startRecording = useCallback(async () => {
-    setError("");
+    setSubmitError("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -109,25 +181,21 @@ function CloneTab() {
       timerRef.current = setInterval(() => {
         secs += 1;
         setElapsed(secs);
-        // Auto-stop at MAX_RECORD_S
         if (secs >= MAX_RECORD_S) doStopRef.current();
       }, 1000);
     } catch {
-      setError("Microphone access denied. Allow mic in browser settings.");
-      setStage("error");
+      setSubmitError("Microphone access denied. Allow mic in browser settings.");
     }
   }, []);
 
-  const stopRecording = useCallback(() => {
-    doStopRef.current();
-  }, []);
+  const stopRecording = useCallback(() => { doStopRef.current(); }, []);
 
   const submitClone = useCallback(async () => {
     if (!blobRef.current || !voiceName.trim()) return;
-    if (!API_KEY) { setError("NEXT_PUBLIC_ELEVENLABS_API_KEY not set"); return; }
+    if (!API_KEY) { setSubmitError("NEXT_PUBLIC_ELEVENLABS_API_KEY not set"); return; }
 
     setStage("loading");
-    setError("");
+    setSubmitError("");
     try {
       const form = new FormData();
       form.append("name",  voiceName.trim());
@@ -142,8 +210,7 @@ function CloneTab() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, unknown>;
         const detail = (body.detail as Record<string, unknown>)?.message
-          ?? (body.detail as string)
-          ?? `Error ${res.status}`;
+          ?? (body.detail as string) ?? `Error ${res.status}`;
         throw new Error(String(detail));
       }
 
@@ -152,12 +219,16 @@ function CloneTab() {
       setSavedName(voiceName.trim());
       setStage("saved");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setStage("error");
+      // Keep stage as "recorded" so user can fix name or retry — don't wipe their recording
+      setSubmitError(err instanceof Error ? err.message : "Something went wrong. Try again.");
+      setStage("recorded");
     }
   }, [voiceName]);
 
-  useEffect(() => () => { stopTimer(); streamRef.current?.getTracks().forEach((t) => t.stop()); }, []);
+  useEffect(() => () => {
+    stopTimer();
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+  }, []);
 
   const hasEnough = elapsed >= MIN_RECORD_S;
 
@@ -170,9 +241,15 @@ function CloneTab() {
         </div>
         <div>
           <p className="text-2xl font-bold mb-1" style={{ color: ON_BG }}>{savedName}</p>
-          <p className="text-sm" style={{ color: ON_BG2 }}>Voice cloned and set as your Echo voice.</p>
+          <p className="text-sm" style={{ color: ON_BG2 }}>
+            Voice cloned and added to your voice library.
+          </p>
+          <p className="text-xs mt-1" style={{ color: ON_BG3 }}>
+            Find it in Settings → Voice → Your Voices
+          </p>
         </div>
-        <button onClick={() => { setStage("idle"); setVoiceName(""); setAudioUrl(null); setElapsed(0); }}
+        <button
+          onClick={() => { setStage("idle"); setVoiceName(""); setAudioUrl(null); setElapsed(0); setSubmitError(""); }}
           className="w-full rounded-2xl py-3 text-sm font-semibold cursor-pointer"
           style={{ backgroundColor: "rgba(255,255,255,0.2)", color: ON_BG, border: "1px solid rgba(255,255,255,0.35)" }}>
           Clone another voice
@@ -192,19 +269,26 @@ function CloneTab() {
         </p>
       </div>
 
-      {/* Voice name input */}
-      <input
-        type="text"
-        placeholder="Name this voice (e.g. My Voice)"
-        value={voiceName}
-        onChange={(e) => setVoiceName(e.target.value)}
-        className="w-full rounded-2xl px-4 py-3 text-sm outline-none"
-        style={{ backgroundColor: CARD, boxShadow: SHADOW, color: TEXT,
-          border: `2px solid ${voiceName.trim() ? PURPLE : "transparent"}` }}
-      />
+      {/* Voice name input — always visible so user knows it's required */}
+      <div>
+        <input
+          type="text"
+          placeholder="Name this voice (e.g. My Voice)"
+          value={voiceName}
+          onChange={(e) => setVoiceName(e.target.value)}
+          className="w-full rounded-2xl px-4 py-3 text-sm outline-none"
+          style={{ backgroundColor: CARD, boxShadow: SHADOW, color: TEXT,
+            border: `2px solid ${voiceName.trim() ? PURPLE : "transparent"}` }}
+        />
+        {!voiceName.trim() && (
+          <p className="text-xs mt-1.5 ml-1" style={{ color: ON_BG3 }}>
+            ↑ Enter a name — you&apos;ll need this to save
+          </p>
+        )}
+      </div>
 
-      {/* Record button */}
-      {stage !== "recorded" && (
+      {/* Record button — hide while showing the recorded playback */}
+      {stage !== "recorded" && stage !== "loading" && (
         <div className="flex flex-col items-center gap-4">
           <div className="relative flex items-center justify-center">
             {stage === "recording" && (
@@ -214,7 +298,6 @@ function CloneTab() {
             )}
             <button
               onClick={stage === "recording" ? stopRecording : startRecording}
-              disabled={stage === "loading"}
               className="w-24 h-24 rounded-full flex items-center justify-center cursor-pointer select-none"
               style={{
                 backgroundColor: stage === "recording" ? "#FF3B30" : "rgba(255,255,255,0.2)",
@@ -229,25 +312,21 @@ function CloneTab() {
           </div>
 
           {stage === "recording" && (
-            <div className="flex flex-col items-center gap-1">
-              <p className="text-2xl font-bold tabular-nums" style={{ color: ON_BG }}>{fmt(elapsed)}</p>
-              <p className="text-xs" style={{ color: hasEnough ? GREEN : ON_BG3 }}>
-                {hasEnough ? "✓ Enough to clone — keep going for better quality" : `${MIN_RECORD_S - elapsed}s more needed`}
-              </p>
-            </div>
-          )}
-
-          {stage === "recording" && (
-            <button
-              onClick={stopRecording}
-              className="w-full rounded-2xl py-3 text-sm font-semibold cursor-pointer"
-              style={{
-                backgroundColor: "rgba(255,59,48,0.18)",
-                color: "#FF3B30",
-                border: "1px solid rgba(255,59,48,0.35)",
-              }}>
-              Stop Recording
-            </button>
+            <>
+              <div className="flex flex-col items-center gap-1">
+                <p className="text-2xl font-bold tabular-nums" style={{ color: ON_BG }}>{fmt(elapsed)}</p>
+                <p className="text-xs" style={{ color: hasEnough ? GREEN : ON_BG3 }}>
+                  {hasEnough ? "✓ Enough to clone — keep going for better quality" : `${MIN_RECORD_S - elapsed}s more needed`}
+                </p>
+              </div>
+              <button
+                onClick={stopRecording}
+                className="w-full rounded-2xl py-3 text-sm font-semibold cursor-pointer"
+                style={{ backgroundColor: "rgba(255,59,48,0.18)", color: "#FF3B30",
+                  border: "1px solid rgba(255,59,48,0.35)" }}>
+                Stop Recording
+              </button>
+            </>
           )}
 
           {stage === "idle" && (
@@ -261,30 +340,48 @@ function CloneTab() {
         <div className="flex flex-col gap-3">
           <div className="rounded-2xl p-4" style={{ backgroundColor: CARD, boxShadow: SHADOW }}>
             <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: TEXT3 }}>
-              Preview recording
+              Preview your recording
             </p>
-            <audio src={audioUrl} controls className="w-full" style={{ borderRadius: 8 }} />
+            <AudioPlayer src={audioUrl} />
           </div>
 
-          <button onClick={() => { setAudioUrl(null); setStage("idle"); setElapsed(0); }}
+          <button
+            onClick={() => { setAudioUrl(null); setStage("idle"); setElapsed(0); setSubmitError(""); }}
             className="w-full rounded-2xl py-3 text-sm font-medium cursor-pointer"
-            style={{ backgroundColor: "rgba(255,255,255,0.15)", color: ON_BG, border: "1px solid rgba(255,255,255,0.3)" }}>
+            style={{ backgroundColor: "rgba(255,255,255,0.15)", color: ON_BG,
+              border: "1px solid rgba(255,255,255,0.3)" }}>
             Re-record
           </button>
 
+          {/* Error from previous submit attempt */}
+          {submitError && (
+            <div className="flex items-start gap-3 rounded-2xl px-4 py-3"
+              style={{ backgroundColor: "rgba(255,59,48,0.15)", border: "1px solid rgba(255,59,48,0.3)" }}>
+              <AlertCircle size={16} style={{ color: "#FF3B30", flexShrink: 0, marginTop: 1 }} />
+              <p className="text-sm" style={{ color: "#FF3B30" }}>{submitError}</p>
+            </div>
+          )}
+
           <button
             onClick={submitClone}
-            disabled={!voiceName.trim() || stage === "loading"}
-            className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold cursor-pointer"
+            disabled={!voiceName.trim()}
+            className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold"
             style={{
               backgroundColor: voiceName.trim() ? GREEN : "rgba(255,255,255,0.2)",
               color: ON_BG,
               fontSize: 15,
+              cursor: voiceName.trim() ? "pointer" : "not-allowed",
               transition: "background-color 0.2s",
+              opacity: voiceName.trim() ? 1 : 0.6,
             }}>
             <Check size={18} />
             Clone &amp; Save Voice
           </button>
+          {!voiceName.trim() && (
+            <p className="text-xs text-center" style={{ color: ON_BG3 }}>
+              Enter a voice name above to save
+            </p>
+          )}
         </div>
       )}
 
@@ -294,15 +391,6 @@ function CloneTab() {
           <Loader2 size={32} style={{ color: ON_BG, animation: "spin 1s linear infinite" }} />
           <p className="text-sm" style={{ color: ON_BG2 }}>Cloning your voice with ElevenLabs…</p>
           <p className="text-xs text-center" style={{ color: ON_BG3 }}>This can take 30–60 seconds</p>
-        </div>
-      )}
-
-      {/* Error */}
-      {(stage === "error") && error && (
-        <div className="flex items-start gap-3 rounded-2xl px-4 py-3"
-          style={{ backgroundColor: "rgba(255,59,48,0.15)", border: "1px solid rgba(255,59,48,0.3)" }}>
-          <AlertCircle size={16} style={{ color: "#FF3B30", flexShrink: 0, marginTop: 1 }} />
-          <p className="text-sm" style={{ color: "#FF3B30" }}>{error}</p>
         </div>
       )}
     </div>
@@ -351,7 +439,7 @@ function DesignTab() {
       setStage("preview");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
-      setStage("error");
+      setStage("idle");
     }
   }, [description]);
 
@@ -364,8 +452,8 @@ function DesignTab() {
         method: "POST",
         headers: { "xi-api-key": API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({
-          voice_name:        voiceName.trim(),
-          voice_description: description.trim(),
+          voice_name:         voiceName.trim(),
+          voice_description:  description.trim(),
           generated_voice_id: previewId,
         }),
       });
@@ -383,7 +471,7 @@ function DesignTab() {
       setStage("saved");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
-      setStage("error");
+      setStage("preview");  // stay on preview so they can retry
     }
   }, [previewId, voiceName, description]);
 
@@ -396,9 +484,13 @@ function DesignTab() {
         </div>
         <div>
           <p className="text-2xl font-bold mb-1" style={{ color: ON_BG }}>{savedName}</p>
-          <p className="text-sm" style={{ color: ON_BG2 }}>Voice saved and set as your Echo voice.</p>
+          <p className="text-sm" style={{ color: ON_BG2 }}>Voice saved and added to your voice library.</p>
+          <p className="text-xs mt-1" style={{ color: ON_BG3 }}>
+            Find it in Settings → Voice → Your Voices
+          </p>
         </div>
-        <button onClick={() => { setStage("idle"); setDescription(""); setVoiceName(""); setPreviewUrl(null); setPreviewId(""); }}
+        <button
+          onClick={() => { setStage("idle"); setDescription(""); setVoiceName(""); setPreviewUrl(null); setPreviewId(""); setError(""); }}
           className="w-full rounded-2xl py-3 text-sm font-semibold cursor-pointer"
           style={{ backgroundColor: "rgba(255,255,255,0.2)", color: ON_BG, border: "1px solid rgba(255,255,255,0.35)" }}>
           Design another voice
@@ -417,7 +509,7 @@ function DesignTab() {
           age, tone, accent, energy level all help.
         </p>
         <p className="text-xs mt-2 italic" style={{ color: TEXT3 }}>
-          e.g. "Young American woman, warm and conversational, college-age energy"
+          e.g. &quot;Young American woman, warm and conversational, college-age energy&quot;
         </p>
       </div>
 
@@ -437,18 +529,28 @@ function DesignTab() {
         <button
           onClick={generatePreview}
           disabled={!description.trim() || stage === "loading"}
-          className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 rounded-2xl py-4 font-semibold"
           style={{
             backgroundColor: description.trim() && stage !== "loading"
               ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.2)",
             color: description.trim() && stage !== "loading" ? PURPLE : ON_BG,
             fontSize: 15,
+            cursor: description.trim() && stage !== "loading" ? "pointer" : "not-allowed",
             transition: "all 0.2s",
           }}>
           {stage === "loading"
             ? <><Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> Generating preview…</>
             : <><Sparkles size={18} /> Generate Preview</>}
         </button>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="flex items-start gap-3 rounded-2xl px-4 py-3"
+          style={{ backgroundColor: "rgba(255,59,48,0.15)", border: "1px solid rgba(255,59,48,0.3)" }}>
+          <AlertCircle size={16} style={{ color: "#FF3B30", flexShrink: 0, marginTop: 1 }} />
+          <p className="text-sm" style={{ color: "#FF3B30" }}>{error}</p>
+        </div>
       )}
 
       {/* Preview */}
@@ -458,50 +560,49 @@ function DesignTab() {
             <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: TEXT3 }}>
               Voice preview
             </p>
-            <audio src={previewUrl} controls className="w-full" style={{ borderRadius: 8 }} />
+            <AudioPlayer src={previewUrl} />
           </div>
 
           {/* Name input */}
-          <input
-            type="text"
-            placeholder="Name this voice (e.g. My AI Voice)"
-            value={voiceName}
-            onChange={(e) => setVoiceName(e.target.value)}
-            className="w-full rounded-2xl px-4 py-3 text-sm outline-none"
-            style={{ backgroundColor: CARD, boxShadow: SHADOW, color: TEXT,
-              border: `2px solid ${voiceName.trim() ? PURPLE : "transparent"}` }}
-          />
+          <div>
+            <input
+              type="text"
+              placeholder="Name this voice (e.g. My AI Voice)"
+              value={voiceName}
+              onChange={(e) => setVoiceName(e.target.value)}
+              className="w-full rounded-2xl px-4 py-3 text-sm outline-none"
+              style={{ backgroundColor: CARD, boxShadow: SHADOW, color: TEXT,
+                border: `2px solid ${voiceName.trim() ? PURPLE : "transparent"}` }}
+            />
+            {!voiceName.trim() && (
+              <p className="text-xs mt-1.5 ml-1" style={{ color: ON_BG3 }}>
+                ↑ Enter a name to save this voice
+              </p>
+            )}
+          </div>
 
           <div className="flex gap-2">
-            <button onClick={() => { setStage("idle"); setPreviewUrl(null); setPreviewId(""); }}
+            <button
+              onClick={() => { setStage("idle"); setPreviewUrl(null); setPreviewId(""); setError(""); }}
               className="flex-1 rounded-2xl py-3 text-sm font-medium cursor-pointer"
-              style={{ backgroundColor: "rgba(255,255,255,0.15)", color: ON_BG, border: "1px solid rgba(255,255,255,0.3)" }}>
+              style={{ backgroundColor: "rgba(255,255,255,0.15)", color: ON_BG,
+                border: "1px solid rgba(255,255,255,0.3)" }}>
               Try again
             </button>
             <button
               onClick={saveDesignedVoice}
               disabled={!voiceName.trim()}
-              className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl py-3 text-sm font-semibold cursor-pointer"
+              className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl py-3 text-sm font-semibold"
               style={{
                 backgroundColor: voiceName.trim() ? GREEN : "rgba(255,255,255,0.2)",
-                color: ON_BG, transition: "background-color 0.2s",
+                color: ON_BG,
+                cursor: voiceName.trim() ? "pointer" : "not-allowed",
+                opacity: voiceName.trim() ? 1 : 0.6,
+                transition: "background-color 0.2s",
               }}>
               <Check size={16} />
               Use this voice
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* Error */}
-      {stage === "error" && error && (
-        <div className="flex items-start gap-3 rounded-2xl px-4 py-3"
-          style={{ backgroundColor: "rgba(255,59,48,0.15)", border: "1px solid rgba(255,59,48,0.3)" }}>
-          <AlertCircle size={16} style={{ color: "#FF3B30", flexShrink: 0, marginTop: 1 }} />
-          <div>
-            <p className="text-sm" style={{ color: "#FF3B30" }}>{error}</p>
-            <button onClick={() => setStage("idle")} className="text-xs mt-1 underline cursor-pointer"
-              style={{ color: "#FF3B30" }}>Try again</button>
           </div>
         </div>
       )}
@@ -512,11 +613,10 @@ function DesignTab() {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function VoiceSettingsPage() {
-  const router   = useRouter();
+  const router = useRouter();
   const [tab, setTab] = useState<Tab>("clone");
 
-  // Show currently active voice
-  const [currentVoice, setCurrentVoice] = useState("Rachel (default)");
+  const [currentVoice, setCurrentVoice] = useState("Lauren");
   useEffect(() => {
     try {
       const prefs = JSON.parse(localStorage.getItem("maia_prefs") ?? "{}") as Record<string, unknown>;
