@@ -1,10 +1,34 @@
 "use client";
 import { useState, useRef, useCallback, useEffect } from "react";
 
-// Requires NEXT_PUBLIC_ELEVENLABS_API_KEY and NEXT_PUBLIC_ELEVENLABS_VOICE_ID in .env.local
+// Requires NEXT_PUBLIC_ELEVENLABS_API_KEY in .env.local
+// Voice ID is read dynamically from localStorage (maia_prefs.selectedVoiceId) so
+// the user's choice on the Profile page takes effect immediately.
 const API_KEY = process.env.NEXT_PUBLIC_ELEVENLABS_API_KEY ?? "";
-const VOICE_ID =
-  process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID ?? "21m00Tcm4TlvDq8ikWAM"; // Rachel
+const FALLBACK_VOICE_ID =
+  process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID ?? "l4Coq6695JDX9xtLqXDE"; // Lauren
+
+interface AudioPrefs {
+  voiceId: string;
+  speed: number;   // 0.6 – 1.5 (maps from the 60–150 slider)
+  volume: number;  // 0 – 1   (maps from the 0–100 slider)
+}
+
+function getAudioPrefs(): AudioPrefs {
+  if (typeof window === "undefined") {
+    return { voiceId: FALLBACK_VOICE_ID, speed: 1.0, volume: 1.0 };
+  }
+  try {
+    const prefs = JSON.parse(localStorage.getItem("maia_prefs") ?? "{}") as Record<string, unknown>;
+    return {
+      voiceId: (prefs.selectedVoiceId as string) ?? FALLBACK_VOICE_ID,
+      speed:   typeof prefs.voiceRate === "number" ? prefs.voiceRate : 1.0,
+      volume:  typeof prefs.volume    === "number" ? prefs.volume / 100 : 1.0,
+    };
+  } catch {
+    return { voiceId: FALLBACK_VOICE_ID, speed: 1.0, volume: 1.0 };
+  }
+}
 
 export interface UseElevenLabsReturn {
   speak: (text: string) => Promise<void>;
@@ -53,8 +77,11 @@ export function useElevenLabs(): UseElevenLabsReturn {
       try {
         setIsSpeaking(true);
 
+        // Read prefs fresh on every speak() call so slider changes take effect immediately
+        const { voiceId, speed, volume } = getAudioPrefs();
+
         const res = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
           {
             method: "POST",
             headers: {
@@ -67,6 +94,7 @@ export function useElevenLabs(): UseElevenLabsReturn {
               voice_settings: {
                 stability: 0.5,
                 similarity_boost: 0.75,
+                speed,          // passed to ElevenLabs (0.7–1.2 range)
               },
             }),
           }
@@ -83,7 +111,9 @@ export function useElevenLabs(): UseElevenLabsReturn {
         blobUrlRef.current = url;
 
         const audio = new Audio(url);
-        audioRef.current = audio;
+        audio.volume       = volume;        // 0–1 applied to the audio element
+        audio.playbackRate = speed;         // also applied locally for instant feel
+        audioRef.current   = audio;
 
         audio.onended = () => {
           setIsSpeaking(false);

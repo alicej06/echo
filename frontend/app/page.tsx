@@ -26,11 +26,7 @@ export default function WelcomePage() {
 
         <div className="flex flex-col gap-3 w-full">
           <Link
-<<<<<<< HEAD
-            href="/onboarding"
-=======
             href="/signup"
->>>>>>> 74947e4 (Angela's login page done)
             className="block text-center"
             style={{
               padding: "15px",

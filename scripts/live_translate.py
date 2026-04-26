@@ -82,7 +82,7 @@ COLLECT_SAMPLES    = 51     # samples per recording (matches training data)
 INFER_HOP_SAMPLES  = 20     # run inference every N new EMG samples
 CONFIDENCE_THRESH  = 0.10   # minimum absolute DyFAV score for top letter
 MARGIN_THRESH      = 0.03   # top score must beat 2nd by at least this much
-STABLE_FRAMES      = 6      # same letter must hold for this many consecutive frames before emitting
+STABLE_FRAMES      = 8      # same letter must hold for this many consecutive frames before emitting
 LLM_PAUSE_S        = 1.8
 LLM_MIN_LETTERS    = 2
 TRAIN_REPS_NEEDED  = 5
@@ -94,7 +94,8 @@ DTW_OFFSET_RMS        = 12.0  # RMS threshold to END capture (must drop below th
 DTW_MIN_QUIET         = 60    # consecutive quiet samples before gesture ends (300ms)
 DTW_MIN_GESTURE       = 40    # minimum gesture length in samples (200ms)
 DTW_MAX_GESTURE       = 1200  # maximum gesture buffer (6s)
-DTW_CONFIDENCE_THRESH = 0.20  # minimum confidence to emit a phrase
+DTW_CONFIDENCE_THRESH = 0.75  # minimum confidence to emit a phrase
+DTW_PHRASE_DEBOUNCE_S = 0.80  # suppress same phrase if repeated within this window (seconds)
 TEACH_SAMPLES         = 400   # fixed-length recording for Teach Echo (2s at 200Hz)
 
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -513,6 +514,10 @@ def _make_session(
     last_phrase_ts    = [0.0]
     phrase_llm_running = [False]
 
+    # Phrase debounce — suppress duplicate gestures within DTW_PHRASE_DEBOUNCE_S
+    last_dtw_phrase    = [None]   # last phrase that was emitted
+    last_dtw_emit_ts   = [0.0]   # when it was emitted
+
     # Gesture stability state
     stable_letter   = [None]   # letter currently being held
     stable_count    = [0]      # how many consecutive frames it's been top
@@ -734,11 +739,13 @@ def _make_session(
             if not word:
                 await _ws_broadcast({"type": "error", "message": "No word specified"})
                 return
-            # Merge disk + in-memory recordings
+            # Disk is already up to date (each rep merges before saving).
+            # Using disk as the single source of truth avoids double-counting
+            # in-memory recs that were already flushed to disk.
             disk_recs = load_phrase_recordings(user_id)
-            merged: dict[str, list] = {**disk_recs}
-            for p, recs in phrase_recordings.items():
-                merged.setdefault(p, []).extend(recs)
+            merged: dict[str, list] = dict(disk_recs)
+            print(f"  {clr('teach', VIOLET)}  training with {sum(len(v) for v in merged.values())} "
+                  f"total reps across {len(merged)} gesture(s)")
             if len(merged.get(word, [])) < MIN_REPS:
                 await _ws_broadcast({
                     "type": "error",
@@ -799,6 +806,19 @@ def _make_session(
             if ws_port:
                 await _ws_broadcast({"type": "gesture_state", "state": "idle", "rms": 0.0})
             return
+
+        # Debounce: suppress same phrase if repeated within DTW_PHRASE_DEBOUNCE_S
+        now = time.monotonic()
+        if (phrase == last_dtw_phrase[0]
+                and (now - last_dtw_emit_ts[0]) < DTW_PHRASE_DEBOUNCE_S):
+            print(f"\r  {clr('~', DIM)}  '{phrase}' debounced ({now - last_dtw_emit_ts[0]:.2f}s since last)          \n",
+                  flush=True)
+            if ws_port:
+                await _ws_broadcast({"type": "gesture_state", "state": "idle", "rms": 0.0})
+            return
+        last_dtw_phrase[0]  = phrase
+        last_dtw_emit_ts[0] = now
+
         print(f"\r  {clr(phrase.upper(), BOLD + GREEN)}  ({confidence:.0%})          \n", flush=True)
         if ws_port:
             await _ws_broadcast({
@@ -866,11 +886,15 @@ def _make_session(
                         mode[0] = "recognition"
                         phrase_recordings.setdefault(word, []).append(raw_t)
                         count = len(phrase_recordings[word])
-                        _snap = {k: list(v) for k, v in phrase_recordings.items()}
+                        _disk = load_phrase_recordings(user_id)
+                        _disk[word] = phrase_recordings[word]
+                        _snap = {k: list(v) for k, v in _disk.items()}
                         asyncio.get_running_loop().run_in_executor(
                             None, save_phrase_recordings, _snap, user_id
                         )
-                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved")
+                        total_words = len(_disk)
+                        print(f"  {clr('teach', VIOLET)}  '{word}' rep {count} saved  "
+                              f"(library has {total_words} gesture(s) on disk)")
                         if ws_port:
                             asyncio.create_task(_ws_broadcast({
                                 "type": "teach_ack",
