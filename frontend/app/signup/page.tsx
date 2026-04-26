@@ -39,7 +39,7 @@ export default function SignupPage() {
       localStorage.setItem("userEmail", email);
       localStorage.setItem("userPassword", password);
 
-      router.push("/login");
+      router.push("/onboarding");
     } catch (err) {
       setError("Signup failed. Please try again.");
     } finally {

@@ -1,5 +1,6 @@
 "use client";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Mic, Square, Play, Check, Loader2, Sparkles, AlertCircle } from "lucide-react";
 
@@ -511,8 +512,10 @@ function DesignTab() {
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
-export default function VoiceSettingsPage() {
+function VoiceSettingsContent() {
   const router   = useRouter();
+  const params   = useSearchParams();
+  const fromOnboarding = params.get("from") === "onboarding";
   const [tab, setTab] = useState<Tab>("clone");
 
   // Show currently active voice
@@ -531,7 +534,7 @@ export default function VoiceSettingsPage() {
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <button
-            onClick={() => router.back()}
+            onClick={() => fromOnboarding ? router.push("/home") : router.back()}
             className="w-9 h-9 rounded-xl flex items-center justify-center cursor-pointer flex-shrink-0"
             style={{ backgroundColor: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.35)" }}>
             <ArrowLeft size={18} style={{ color: ON_BG }} />
@@ -566,5 +569,13 @@ export default function VoiceSettingsPage() {
 
       </div>
     </main>
+  );
+}
+
+export default function VoiceSettingsPage() {
+  return (
+    <Suspense>
+      <VoiceSettingsContent />
+    </Suspense>
   );
 }

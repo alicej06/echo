@@ -18,13 +18,11 @@ const ON_BG       = "#fff";
 const ON_BG_2     = "rgba(255,255,255,0.85)";
 const ON_BG_3     = "rgba(255,255,255,0.6)";
 
-const TOTAL_REPS = 5;
+const TOTAL_REPS = 3;
 const REP_INSTRUCTIONS = [
   "Hold your gesture and tap Record",
   "Great! Do it again",
-  "Keep going!",
-  "Almost there!",
-  "One last time",
+  "One last time!",
 ];
 
 type Step = "name" | "record" | "confirm";

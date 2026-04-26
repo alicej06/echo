@@ -28,7 +28,7 @@ export default function LoginPage() {
       localStorage.setItem("userToken", "demo-token-" + Date.now());
       localStorage.setItem("userEmail", email);
 
-      router.push("/home");
+      router.push("/onboarding");
     } catch (err) {
       setError("Login failed. Please try again.");
     } finally {

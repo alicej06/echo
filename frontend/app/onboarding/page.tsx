@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Watch, Volume2, Check, Loader2, Mic, Play, Square } from "lucide-react";
+import { Watch, Volume2, Check, Loader2, Mic, Play, Square, Sparkles } from "lucide-react";
 import { useMyoWs } from "@/hooks/use-myo-ws";
 import { useElevenLabs } from "@/hooks/use-elevenlabs";
 
@@ -465,6 +465,7 @@ function VoiceStep({
   selected: string;
   onSelect: (name: string, voiceId: string) => void;
 }) {
+  const router = useRouter();
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const audioRef  = useRef<HTMLAudioElement | null>(null);
   const blobRef   = useRef<string | null>(null);
@@ -589,6 +590,30 @@ function VoiceStep({
           );
         })}
       </div>
+
+      {/* Personalize voice CTA */}
+      <button
+        onClick={() => router.push("/voice-settings?from=onboarding")}
+        style={{
+          marginTop: 8,
+          width: "100%",
+          padding: "12px 16px",
+          borderRadius: 14,
+          background: "rgba(255,255,255,0.12)",
+          border: "1.5px solid rgba(255,255,255,0.3)",
+          color: "#fff",
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+        }}
+      >
+        <Sparkles size={14} />
+        Personalize your voice
+      </button>
     </>
   );
 }
