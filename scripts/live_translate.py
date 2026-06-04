@@ -82,7 +82,7 @@ COLLECT_SAMPLES    = 51     # samples per recording (matches training data)
 INFER_HOP_SAMPLES  = 20     # run inference every N new EMG samples
 CONFIDENCE_THRESH  = 0.10   # minimum absolute DyFAV score for top letter
 MARGIN_THRESH      = 0.03   # top score must beat 2nd by at least this much
-STABLE_FRAMES      = 8      # same letter must hold for this many consecutive frames before emitting
+STABLE_FRAMES      = 3      # same letter must hold for this many consecutive frames before emitting
 LLM_PAUSE_S        = 1.8
 LLM_MIN_LETTERS    = 2
 TRAIN_REPS_NEEDED  = 5
@@ -91,7 +91,7 @@ TRAIN_REPS_NEEDED  = 5
 DTW_RMS_WINDOW        = 20    # samples to compute windowed RMS over (~100ms at 200Hz)
 DTW_ONSET_RMS         = 18.0  # RMS threshold to START capturing a gesture
 DTW_OFFSET_RMS        = 12.0  # RMS threshold to END capture (must drop below this)
-DTW_MIN_QUIET         = 60    # consecutive quiet samples before gesture ends (300ms)
+DTW_MIN_QUIET         = 30    # consecutive quiet samples before gesture ends (150ms)
 DTW_MIN_GESTURE       = 40    # minimum gesture length in samples (200ms)
 DTW_MAX_GESTURE       = 1200  # maximum gesture buffer (6s)
 DTW_CONFIDENCE_THRESH = 0.75  # minimum confidence to emit a phrase
@@ -231,7 +231,7 @@ LLM_PHRASE_SYSTEM = (
     "If the input is a single complete phrase, return it naturally capitalized."
 )
 
-LLM_PHRASE_PAUSE_S  = 2.5  # seconds of silence before constructing a sentence
+LLM_PHRASE_PAUSE_S  = 0.8  # seconds of silence before constructing a sentence
 LLM_PHRASE_MAX      = 8    # also flush if this many phrases are buffered
 
 
