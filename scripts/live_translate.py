@@ -231,8 +231,9 @@ LLM_PHRASE_SYSTEM = (
     "If the input is a single complete phrase, return it naturally capitalized."
 )
 
-LLM_PHRASE_PAUSE_S  = 0.8  # seconds of silence before constructing a sentence
-LLM_PHRASE_MAX      = 8    # also flush if this many phrases are buffered
+LLM_PHRASE_PAUSE_S      = 1.5   # seconds of silence after 2+ phrases buffered
+LLM_PHRASE_SOLO_PAUSE_S = 3.0   # longer wait when only 1 phrase buffered (probably mid-sentence)
+LLM_PHRASE_MAX          = 8     # also flush if this many phrases are buffered
 
 
 def _try_anthropic(text: str) -> str | None:
@@ -1083,13 +1084,15 @@ def _make_session(
             await asyncio.sleep(0.2)
             if not use_llm or phrase_llm_running[0] or not pending_phrases:
                 continue
-            silence = time.monotonic() - last_phrase_ts[0]
-            if silence < LLM_PHRASE_PAUSE_S and len(pending_phrases) < LLM_PHRASE_MAX:
+            silence  = time.monotonic() - last_phrase_ts[0]
+            n        = len(pending_phrases)
+            required = LLM_PHRASE_SOLO_PAUSE_S if n == 1 else LLM_PHRASE_PAUSE_S
+            if silence < required and n < LLM_PHRASE_MAX:
                 continue
             to_translate = list(pending_phrases)
             pending_phrases.clear()
             phrase_llm_running[0] = True
-            print(f"\r  {clr('llm', VIOLET)}  constructing sentence from: {to_translate}          ",
+            print(f"\r  {clr('llm', VIOLET)}  constructing sentence from {n} phrase(s): {to_translate}          ",
                   flush=True)
             if ws_port:
                 asyncio.create_task(_ws_broadcast({"type": "sentence_building", "phrases": to_translate}))
